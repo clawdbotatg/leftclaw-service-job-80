@@ -1,9 +1,8 @@
-
 import fs from "fs";
 import path from "path";
 import { Address } from "viem";
 import { foundry } from "viem/chains";
-import { AddressComponent } from "~~/app/blockexplorer/_components/AddressComponent";
+import { AddressComponent } from "~~/app/_blockexplorer-disabled/_components/AddressComponent";
 import deployedContracts from "~~/contracts/deployedContracts";
 import { isZeroAddress } from "~~/utils/scaffold-eth/common";
 import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
@@ -48,18 +47,7 @@ const getContractData = async (address: Address) => {
     return null;
   }
 
-  const artifactsDirectory = path.join(
-    __dirname,
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "foundry",
-    "out",
-  );
+  const artifactsDirectory = path.join(__dirname, "..", "..", "..", "..", "..", "..", "..", "foundry", "out");
 
   if (!fs.existsSync(artifactsDirectory)) {
     throw new Error(`Directory ${artifactsDirectory} not found.`);
