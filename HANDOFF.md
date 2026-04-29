@@ -623,7 +623,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `contract_audit` | ✅ done — 6 issues filed (1 High, 5 Medium, 6 Info) |  |
 | `contract_fix` | ✅ done — all High + Medium closed |  |
 | `frontend_audit` | ✅ done — 2 ship-blockers + 6 should-fix issues filed |  |
-| `frontend_fix` |  |  |
+| `frontend_fix` | ✅ done — all 8 issues (#7-#14) closed; yarn build + forge test pass |  |
 | `full_audit` / `full_audit_fix` |  |  |
 | `deploy_contract` |  |  |
 | `livecontract_fix` |  |  |
@@ -950,7 +950,7 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Opus subagent after Stage 7 (`frontend_audit`) completed. Edit this date when you append a new section.
+2026-04-28 by Opus subagent after Stage 8 (`frontend_fix`) completed — all 8 frontend-audit issues closed. Edit this date when you append a new section.
 
 ---
 
@@ -1312,4 +1312,59 @@ Stage 8 should be a quick pass: each issue has a precise one-paragraph fix recip
 - Each fix has an explicit one-paragraph recipe in the issue body. Don't redesign — implement.
 - Commit each fix with `closes #N` in the message; close the issue afterward.
 - Stop condition: do NOT deploy contracts (Stage 5 still pending), do NOT bgipfs upload (Stage 9).
+
+---
+
+## Stage 8 — Frontend Fixes
+
+**Status:** PASS — all 8 frontend-audit issues (#7-#14) closed.
+
+**Final build outcomes:**
+- `cd packages/nextjs && yarn build` → exit 0 (12/12 static pages generated; tab title `%s | Animal Kingdom TCG` preserved; out/ directory populated)
+- `cd packages/foundry && forge build` → exit 0 (only pre-existing `note` lints, no errors)
+- `cd packages/foundry && forge test` → 47 passed, 0 failed, 0 skipped (4 suites: AnimalKingdomCard 21 tests, plus YourContract / Counter scaffold suites)
+
+### Issue → fix → commit table
+
+| # | Severity | Issue | Fix | Commit |
+| - | -------- | ----- | --- | ------ |
+| 7 | ship-blocker | Buy buttons don't become Switch-network CTA on wrong chain | Added `useChainId` + `useSwitchChain` to `PackCard` and `CreaturePickerModal`. When `chainId !== base.id`, the primary CTA slot renders `<button class="btn btn-warning">Switch to Base</button>` driven by `switchChain({ chainId: base.id })` instead of the buy stack. | 75202af |
+| 8 | ship-blocker | Bare `http()` fallback hits public RPC | (Closed in prior session) — replaced bare fallback with explicit Alchemy-or-throw in `wagmiConfig.tsx`. | 7d60671 |
+| 9 | should-fix | Trait page doesn't pre-check TRAIT_FUSER_ROLE | `CreaturePickerModal` reads `card.TRAIT_FUSER_ROLE()` and `card.hasRole(role, traitShopAddress)`. If false, banner explains and Buy & Fuse stays disabled. Loading state (`undefined`) is permissive. | 75202af |
+| 10 | should-fix | Footer raw "Card contract" link | Imported `Address` from `@scaffold-ui/components`. Footer now renders `Card: <Address address={cardAddress} size="xs"/>` with blockie + copy + explorer. | 96dd6f0 |
+| 11 | should-fix | Home page `<p>Sign in or connect</p>` | Replaced the unauthenticated branch's paragraph with `<RainbowKitCustomConnectButton/>` (the same component the header uses). The supporting copy moved to a small subtitle below the button. | 96dd6f0 |
+| 12 | should-fix | `pollingInterval: 4000` (QA recommends 3000) | `scaffold.config.ts` updated to `3000`; comment refreshed to reference QA SKILL. | 96dd6f0 |
+| 13 | should-fix | `useScaffoldEventHistory` `fromBlock: 0n` | Added `BASE_EVENT_HISTORY_FALLBACK_BLOCK = 45_000_000n` constant in `pack/page.tsx`. `PackOpenedListener` now uses it instead of `0n`. Confirmed via `grep -rn "fromBlock: 0n" packages/nextjs/{app,components,hooks}` that this was the only call site in source. | 75202af |
+| 14 | should-fix | approve+buy gap: `isApproving`/`cooldownActive` brief simultaneous-false window | Added explicit `approvalSubmitting` state (set on click, cleared in `finally{}`). `buyUsdcDisabled` is now a single derived boolean: `usdcDisabled \|\| !allowanceEnough \|\| !usdcBalanceEnough \|\| approvalSubmitting \|\| cooldownActive \|\| isBuyingUsdc`. Approve button also gates on `approvalSubmitting`. | 75202af |
+
+### Files modified in Stage 8
+
+| File | Issues |
+| --- | --- |
+| `packages/nextjs/app/pack/page.tsx` | #7, #13, #14 |
+| `packages/nextjs/app/traits/page.tsx` | #7, #9 |
+| `packages/nextjs/components/Footer.tsx` | #10 |
+| `packages/nextjs/app/page.tsx` | #11 |
+| `packages/nextjs/scaffold.config.ts` | #12 |
+
+No contract code changed. No deploys. No bgipfs upload — those remain Stage 5 / Stage 9 work.
+
+### Pass/fail vs Stage 8 spec
+
+- [x] Every ship-blocker issue closed (#7, #8)
+- [x] Every should-fix issue closed (#9, #10, #11, #12, #13, #14)
+- [x] After each fix `yarn build` exits 0 (no broken state accumulated)
+- [x] Final `yarn build` exits 0
+- [x] Final `forge build` + `forge test` exit 0
+- [x] HANDOFF.md updated with Stage 8 section
+- [x] Stage table marks `frontend_fix` ✅ done
+- [x] Stop conditions respected — no contract changes, no deploys, no bgipfs upload
+
+### What Stage `deploy_contract` (Stage 5) should pick up
+
+- Run `yarn deploy --network base` from `packages/foundry`. Use `DeployAnimalKingdom.s.sol` (per HANDOFF Stage 2 plan) — set `admin = 0xFE968dE21eb0E77d5877477C31a04A3075c0086E` (the job client) as the owner of all three contracts.
+- After deploy, **grant `TRAIT_FUSER_ROLE` to TraitShop** (Stage 2 documents this requirement). Without it, `buyTrait` reverts.
+- After deploy, regenerate `packages/nextjs/contracts/deployedContracts.ts` so `deployedOnBlock` is populated. The scaffold hook prefers that value over `BASE_EVENT_HISTORY_FALLBACK_BLOCK`.
+- Verify on Basescan: `yarn verify --network base`. Confirm green checkmarks.
+- Then come back to Stage 9 (`deploy_app`) and run `npx bgipfs upload packages/nextjs/out`.
 
