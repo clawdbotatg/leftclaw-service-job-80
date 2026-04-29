@@ -627,7 +627,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `full_audit` / `full_audit_fix` |  |  |
 | `deploy_contract` | ✅ done — 3 contracts deployed to Base mainnet, Sourcify exact_match verified |  |
 | `livecontract_fix` |  |  |
-| `deploy_app` (bgipfs) |  |  |
+| `deploy_app` (bgipfs) | ✅ done — CID `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44`, live HTTP 200 |  |
 | `liveapp_fix` |  |  |
 | `liveuserjourney` |  |  |
 | `readme` |  |  |
@@ -950,7 +950,7 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-29 by Opus subagent after Stage 9 (`deploy_contract`) completed — 3 contracts deployed to Base mainnet, all verified on Sourcify (exact_match). Edit this date when you append a new section.
+2026-04-29 by Opus subagent after Stage 11 (`deploy_app`) completed — frontend deployed to bgipfs at CID `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44`, live URL HTTP 200. Edit this date when you append a new section.
 
 ---
 
@@ -1506,4 +1506,89 @@ Substitute `<CLIENT_PK>` with the client's private key (or use a hardware-wallet
 - The new `out/` directory at `packages/nextjs/out/` already includes the live mainnet contract addresses inside its bundled JS (regenerated `deployedContracts.ts` was baked in at build time).
 - Run `npx bgipfs upload packages/nextjs/out` from the project root. Confirm the new CID is different from any prior CID before reporting done.
 - Live URL form: `https://<CID>.ipfs.community.bgipfs.com/`. Validate with `curl -I` (expect HTTP 200) and a quick browser check that the connect button renders and the pack/trait pages don't 404.
+
+---
+
+## Stage 11 — bgipfs Deploy
+
+**Status:** PASS
+
+**CID:** `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44`
+
+**Live URL:** https://bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44.ipfs.community.bgipfs.com/
+
+**HTTP check:** `curl -sI` → `HTTP/2 200` (Wed, 29 Apr 2026 13:43:48 GMT, `content-type: text/html`, `accept-ranges: bytes`).
+
+**CID uniqueness:** Confirmed unique — searched all prior `~/clawd/ethereum-servicer/builds/*/HANDOFF.md` and `~/clawd/ethereum-servicer/audits/` for this CID and got zero hits. This is the first IPFS upload for Job #80.
+
+### Build artifacts
+
+| Metric | Value |
+| --- | --- |
+| Output dir | `packages/nextjs/out/` |
+| Total size | 15M (`du -sh packages/nextjs/out`) |
+| File count | 395 (`find packages/nextjs/out -type f \| wc -l`) |
+| Top-level paths | `_next/`, `404/`, `404.html`, `battle/`, `collection/`, `debug/`, `deck/`, `favicon.png`, `icon/`, `index.html`, `index.txt`, `logo.svg`, `manifest.json`, `pack/`, `profile/`, `thumbnail.jpg`, `traits/` |
+| Bundled contract sanity | `0x230f1ffd190c1ae36e14950a935669f708d3b2be` (AnimalKingdomCard) found in `out/_next/static/chunks/*.js` — confirms the post-Stage-9 `deployedContracts.ts` was the build input |
+
+### Build command (re-run from clean state)
+
+```bash
+cd packages/nextjs && rm -rf out .next && \
+  NEXT_PUBLIC_IPFS_BUILD=true \
+  NODE_OPTIONS="--require ./polyfill-localstorage.cjs" \
+  yarn build
+```
+
+Result: exit 0, 12/12 static pages, 3/3 export. Only the pre-existing non-blocking `@farcaster/mini-app-solana` peer-dep warning from Privy (carried over from prior stages) — non-blocking.
+
+The default SE2 `next build` script does NOT set `NEXT_PUBLIC_IPFS_BUILD=true` or the `polyfill-localstorage` `NODE_OPTIONS` — these must be set as env vars at invoke time. Stage 12 may want to bake them into a dedicated `ipfs:build` script in `packages/nextjs/package.json` to make it idempotent for the next IPFS rotation, but doing so isn't required to ship.
+
+### Module-level localStorage check
+
+`grep -rn "localStorage" packages/nextjs/{app,components,hooks} --include="*.ts" --include="*.tsx" | grep -v "_blockexplorer-disabled"` returns matches in:
+
+- `app/battle/page.tsx:138` — inside an effect callback (`if (typeof window !== "undefined")`)
+- `app/pack/page.tsx:140,150,246,486,496` — inside event handlers / effect callbacks
+- `app/deck/page.tsx:106,119` — inside event handlers
+- `components/scaffold-eth/RainbowKitCustomConnectButton/RevealBurnerPKModal.tsx:15` — inside a hook callback
+
+All access is gated behind `typeof window !== "undefined"` checks or only runs after mount. None at module-init scope, none would crash static export. Confirmed during build by 12/12 static pages generated cleanly.
+
+### bgipfs init notes
+
+- Used `npx bgipfs upload config init -k <BGIPFS_TOKEN> -u https://upload.bgipfs.com` (NOT the deprecated `npx bgipfs init` command) per CLAUDE.md.
+- This CLI version writes the config to `<cwd>/ipfs-upload.config.json`, NOT to `~/.config/bgipfs/`. The file at the repo root contains the API key in cleartext, so:
+  - Added `ipfs-upload.config.json` to `.gitignore` to prevent accidental commit of the token.
+  - The file points to `https://upload.bgipfs.com` (correct production endpoint), not localhost — verified before upload.
+- After upload, `npx bgipfs upload packages/nextjs/out` returned the CID above on first try. No retries needed.
+
+### Stage table
+
+| Stage | Status |
+| --- | --- |
+| `deploy_app` (bgipfs) | ✅ done — `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44` live and HTTP 200 |
+
+(Also reflected in the canonical stage table earlier in this document — see "Stage table" near line 616.)
+
+### Pass/fail vs Stage 11 spec
+
+- [x] `packages/nextjs/contracts/deployedContracts.ts` contains all 3 Base mainnet addresses at chainId 8453 (AnimalKingdomCard, PackShop, TraitShop)
+- [x] `cd packages/nextjs && rm -rf out .next && yarn build` exits 0 with `out/` populated (with explicit `NEXT_PUBLIC_IPFS_BUILD=true` + polyfill `NODE_OPTIONS`)
+- [x] `out/` contains `index.html`, `pack/`, `collection/`, `deck/`, `traits/`, `battle/`, `profile/`, `_next/`, `icon/`, etc.
+- [x] No module-level `localStorage` usage outside `_blockexplorer-disabled/`
+- [x] bgipfs config initialized via `npx bgipfs upload config init` (not the deprecated `init`)
+- [x] `ipfs-upload.config.json` added to `.gitignore` (contains API token)
+- [x] `npx bgipfs upload packages/nextjs/out` returned a CID
+- [x] CID is unique vs prior jobs — searched all `~/clawd/ethereum-servicer/builds/*/HANDOFF.md` and `~/clawd/ethereum-servicer/audits/`
+- [x] `curl -sI https://<CID>.ipfs.community.bgipfs.com/` returned `HTTP/2 200`
+- [x] Bundled JS in `out/` contains the live Base mainnet contract addresses (verified by grep of card address)
+- [x] Stop conditions respected — did NOT call `completeJob` (that's Stage 14 / `ready`); did NOT modify contract source; did NOT modify any frontend source
+
+### What Stage 12 (`liveapp_fix` / `liveuserjourney`) should pick up
+
+- Walk USERJOURNEY.md against the live URL `https://bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44.ipfs.community.bgipfs.com/` in a fresh browser with the worker wallet (or any Base mainnet wallet with a tiny ETH/USDC balance). Note any failures.
+- If the client hasn't yet completed the post-deploy steps from Stage 9 (grant `TRAIT_FUSER_ROLE` to TraitShop, grant `MINTER_ROLE` to a hot wallet, `addPack`, seed traits), the pack/trait flows will be expected-broken. That's a client-action prerequisite, not a frontend bug — document it in the live walkthrough rather than trying to fix it in code.
+- If a fix is required and a frontend rebuild is needed, the new CID MUST differ from `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44` before claiming the redeploy succeeded — uploading the same `out/` produces the same CID (which would mean nothing actually changed in the build).
+- Optional polish for Stage 12: bake the IPFS env vars into a dedicated `yarn ipfs:build` script in `packages/nextjs/package.json` so the rebuild incantation is one command instead of three env vars, and add `ipfs-upload.config.json` to a top-level `.gitignore` template across the orchestrator builds dir.
 
