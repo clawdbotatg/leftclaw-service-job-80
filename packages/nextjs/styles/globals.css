@@ -7,6 +7,8 @@
 @theme {
   --shadow-center: 0 0 12px -2px rgb(0 0 0 / 0.05);
   --animate-pulse-fast: pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --font-sans: var(--font-sans, system-ui, sans-serif);
+  --font-display: var(--font-display, var(--font-sans));
 }
 
 @plugin "daisyui" {
@@ -35,7 +37,7 @@
   --color-warning: #ffcf72;
   --color-error: #ff8863;
 
-  --radius-field: 1rem;
+  --radius-field: 0.5rem;
   --radius-box: 1rem;
   --tt-tailw: 6px;
 }
@@ -60,7 +62,7 @@
   --color-warning: #ffcf72;
   --color-error: #ff8863;
 
-  --radius-field: 1rem;
+  --radius-field: 0.5rem;
   --radius-box: 1rem;
 
   --tt-tailw: 6px;
@@ -108,7 +110,12 @@
 
 .btn {
   @apply shadow-md;
-  border-radius: 9999rem;
+  border-radius: 0.5rem;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
 }
 
 .btn.btn-ghost {

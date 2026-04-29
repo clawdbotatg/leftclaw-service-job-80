@@ -1,85 +1,96 @@
-
 "use client";
 
-import { useAccount } from "wagmi";
-import { Address } from "@scaffold-ui/components";
-import type { NextPage } from "next";
-import { hardhat } from "viem/chains";
 import Link from "next/link";
-import { BugAntIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline";
-import { useTargetNetwork } from "~~/hooks/scaffold-eth";
-
+import type { NextPage } from "next";
+import { useAccount } from "wagmi";
+import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
 const Home: NextPage = () => {
-  const { address: connectedAddress } = useAccount();
-  const { targetNetwork } = useTargetNetwork();
+  const { address: connectedAddress, isConnected } = useAccount();
+
+  const { data: balance } = useScaffoldReadContract({
+    contractName: "AnimalKingdomCard",
+    functionName: "balanceOf",
+    args: [connectedAddress],
+  });
 
   return (
-    <>
-      <div className="flex items-center flex-col grow pt-10">
-        <div className="px-5">
-          <h1 className="text-center">
-            <span className="block text-2xl mb-2">Welcome to</span>
-            <span className="block text-4xl font-bold">Scaffold-ETH 2</span>
-            
-          </h1>
-          <div className="flex justify-center items-center space-x-2 flex-col">
-            <p className="my-2 font-medium">Connected Address:</p>
-            <Address
-              address={connectedAddress}
-              chain={targetNetwork}
-              blockExplorerAddressLink={
-                targetNetwork.id === hardhat.id ? `/blockexplorer/address/${connectedAddress}` : undefined
-              }
-            />
-          </div>
-          
-<p className="text-center text-lg">
-  Get started by editing{" "}
-  <code className="italic bg-base-300 text-base font-bold max-w-full break-words break-all inline-block">
-    packages/nextjs/app/page.tsx
-  </code>
-</p>
-<p className="text-center text-lg">
-  Edit your smart contract{" "}
-  <code className="italic bg-base-300 text-base font-bold max-w-full break-words break-all inline-block">
-    YourContract.sol
-  </code>{" "}
-  in{" "}
-  <code className="italic bg-base-300 text-base font-bold max-w-full break-words break-all inline-block">
-    packages/hardhat/contracts
-  </code>
-</p>
-
+    <div className="flex flex-col items-center grow pt-10 pb-16 px-4">
+      <section className="text-center max-w-3xl">
+        <h1 className="font-display text-2xl md:text-4xl mb-4 leading-snug">
+          Animal Kingdom TCG
+          <span className="block text-base md:text-lg opacity-80 mt-3 font-sans">Collect, Build, Battle</span>
+        </h1>
+        <p className="text-lg opacity-80 mb-8">
+          A fully onchain trading-card game on Base. Open packs to roll creatures with permanent stats, fuse cosmetic
+          traits, build a deck, and battle the wild.
+        </p>
+        <div className="flex flex-wrap justify-center gap-3 mb-12">
+          {isConnected ? (
+            <>
+              <Link href="/pack" className="btn btn-primary">
+                Open a Pack
+              </Link>
+              <Link href="/battle" className="btn btn-secondary">
+                Battle
+              </Link>
+              <Link href="/collection" className="btn btn-ghost">
+                Collection
+              </Link>
+            </>
+          ) : (
+            <p className="text-sm opacity-70">Sign in or connect a wallet from the top-right to begin.</p>
+          )}
         </div>
+      </section>
 
-        <div className="grow bg-base-300 w-full mt-16 px-8 py-12">
-          <div className="flex justify-center items-center gap-12 flex-col md:flex-row">
-            <div className="flex flex-col bg-base-100 px-10 py-10 text-center items-center max-w-xs rounded-3xl">
-              <BugAntIcon className="h-8 w-8 fill-secondary" />
-              <p>
-                Tinker with your smart contract using the{" "}
-                <Link href="/debug" passHref className="link">
-                  Debug Contracts
-                </Link>{" "}
-                tab.
-              </p>
+      {isConnected && (
+        <section className="card bg-base-100 shadow-md w-full max-w-2xl p-6">
+          <h2 className="font-display text-base mb-3">Your Kingdom</h2>
+          <div className="flex flex-wrap items-center gap-6">
+            <div>
+              <div className="text-xs opacity-70">Creatures owned</div>
+              <div className="text-3xl font-bold">{balance !== undefined ? balance.toString() : "—"}</div>
             </div>
-            <div className="flex flex-col bg-base-100 px-10 py-10 text-center items-center max-w-xs rounded-3xl">
-              <MagnifyingGlassIcon className="h-8 w-8 fill-secondary" />
-              <p>
-                Explore your local transactions with the{" "}
-                <Link href="/blockexplorer" passHref className="link">
-                  Block Explorer
-                </Link>{" "}
-                tab.
-              </p>
+            <div className="grow flex flex-wrap gap-2 justify-end">
+              <Link href="/collection" className="btn btn-sm btn-outline">
+                View collection
+              </Link>
+              <Link href="/deck" className="btn btn-sm btn-outline">
+                Build a deck
+              </Link>
+              <Link href="/traits" className="btn btn-sm btn-outline">
+                Buy traits
+              </Link>
             </div>
           </div>
-        </div>
-      </div>
-    </>
+        </section>
+      )}
+
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-12 max-w-4xl w-full">
+        <FeatureCard emoji="🎴" title="Open Packs">
+          Pay in ETH, USDC, or fiat (Coinbase Onramp). The off-chain pack roller mints your creatures with
+          onchain-permanent stats.
+        </FeatureCard>
+        <FeatureCard emoji="🛡️" title="Build Decks">
+          Pick four creatures. Live ATK / DEF / CHG / TRK totals. Save unlimited deck presets locally.
+        </FeatureCard>
+        <FeatureCard emoji="⚔️" title="Battle the Wild">
+          Queue against AI opponents. Simultaneous-reveal turns, Momentum mechanics, server-authoritative resolution.
+        </FeatureCard>
+      </section>
+    </div>
   );
 };
+
+const FeatureCard = ({ emoji, title, children }: { emoji: string; title: string; children: React.ReactNode }) => (
+  <div className="card bg-base-100 shadow-md p-5">
+    <div className="text-3xl mb-2" aria-hidden>
+      {emoji}
+    </div>
+    <h3 className="font-display text-sm mb-2">{title}</h3>
+    <p className="text-sm opacity-80">{children}</p>
+  </div>
+);
 
 export default Home;

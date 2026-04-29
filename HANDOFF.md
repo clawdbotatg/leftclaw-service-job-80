@@ -298,6 +298,111 @@ No code, no contracts, no frontend, no deploys — Stage 4 picks those up.
 
 ---
 
+## Stage 4a — Frontend MVP (non-battle)
+
+**Status:** PASS (Stage 4a only — Stage 4b ships the battle screen + WS server)
+
+**Build cmd:** `cd packages/nextjs && NEXT_PUBLIC_IPFS_BUILD=true NODE_OPTIONS="--require ./polyfill-localstorage.cjs" yarn build` — exit 0.
+**Static export size:** 15M at `packages/nextjs/out/`. 12 routes prerendered.
+
+### What was built
+
+Six pages under `packages/nextjs/app/` (Home, Collection, Pack Shop, Deck, Traits, Profile, plus a Battle stub for Stage 4b). Provider chain: `PrivyProvider` → `QueryClientProvider` → `@privy-io/wagmi` `WagmiProvider` → `RainbowKitProvider`. When `NEXT_PUBLIC_PRIVY_APP_ID` is empty the `PrivyProvider` is **skipped entirely** (Privy's SDK throws on a placeholder app ID — we cannot pass `"placeholder-app-id-not-configured"`); the app falls back to plain wagmi + RainbowKit and the header sign-in button renders disabled. This was the only deviation from the original spec wording, recorded here as a fix.
+
+### Files added
+
+| Path | Purpose |
+| --- | --- |
+| `packages/nextjs/app/page.tsx` | Home — hero, owned-creature count for connected users, feature cards |
+| `packages/nextjs/app/collection/page.tsx` | Owned creatures grid, filter by creatureId, sort by id / total / traits |
+| `packages/nextjs/app/pack/page.tsx` | Pack catalog (1..5), ETH + USDC purchase flows, Onramp button, pending-purchase banner, recent CreatureMinted strip |
+| `packages/nextjs/app/deck/page.tsx` | 4-slot tap-to-add deck builder with live totals, CHG counter, Active Trick, save/load to localStorage |
+| `packages/nextjs/app/traits/page.tsx` | Catalog read for traitIds 1..32, modal creature picker, buyTrait flow with 32-trait cap enforcement |
+| `packages/nextjs/app/profile/page.tsx` | Identity, stats, recent creatures strip, OpenSea links |
+| `packages/nextjs/app/battle/page.tsx` | Stage 4b stub — "server not configured" state when `NEXT_PUBLIC_GAME_SERVER_WSS` empty, "coming soon" otherwise. NO `new WebSocket()` here |
+| `packages/nextjs/app/icon.tsx` | Lion-emoji favicon via `next/og`, `dynamic = "force-static"` for static export |
+| `packages/nextjs/components/PrivyLoginButton.tsx` | Always renders a button. Disabled "Sign In (unavailable)" when Privy not configured |
+| `packages/nextjs/components/PrivyLoginButtonInner.tsx` | Real Privy hook consumer, only mounted when `PrivyProvider` is in the tree |
+| `packages/nextjs/utils/animalKingdom.ts` | Creature emoji map, ETH/USDC formatters with USD context, Onramp URL builder, mobile UA detect |
+| `packages/nextjs/hooks/useWriteAndOpen.ts` | `writeAndOpen` mobile pattern — fires write, then nudges focus with 2s delay |
+| `packages/nextjs/.env.example` | Documents every env var with where to obtain each value |
+
+### Files modified
+
+| Path | Change |
+| --- | --- |
+| `packages/nextjs/scaffold.config.ts` | `targetNetworks: [chains.base]`, `appName: "Animal Kingdom TCG"`, `pollingInterval: 4000`, added `privyAppId` / `onrampAppId` / `gameServerWss` / `productionUrl` env reads, `burnerWalletMode: "disabled"` (Base mainnet only) |
+| `packages/nextjs/services/web3/wagmiConfig.tsx` | `createConfig` swapped to `@privy-io/wagmi`'s drop-in (so embedded wallets register as connectors) |
+| `packages/nextjs/services/web3/wagmiConnectors.tsx` | Added `phantomWallet`, `appName` swapped from `"scaffold-eth-2"` → `scaffoldConfig.appName` |
+| `packages/nextjs/components/ScaffoldEthAppWithProviders.tsx` | New provider chain (Privy → wagmi → RainbowKit) with conditional fallback when Privy unconfigured |
+| `packages/nextjs/components/Header.tsx` | Lion-emoji logo, project name, nav links (Collection / Pack Shop / Deck / Battle / Traits / Profile), Privy + RainbowKit buttons |
+| `packages/nextjs/components/Footer.tsx` | Removed SE2 Fork-me / BuidlGuidl / Support / `nativeCurrencyPrice` badge entirely. Now: project name, year, GitHub link, Basescan card-contract link |
+| `packages/nextjs/app/layout.tsx` | `next/font/google` Inter (sans) + Press_Start_2P (display) — no `<link>` tags |
+| `packages/nextjs/utils/scaffold-eth/getMetadata.ts` | Title template `"%s | Animal Kingdom TCG"`, `NEXT_PUBLIC_PRODUCTION_URL` checked first for OG image absolute URL |
+| `packages/nextjs/styles/globals.css` | `--radius-field: 0.5rem` in BOTH theme blocks, `.btn` border-radius `9999rem` → `0.5rem`, font CSS vars hooked to `next/font` |
+| `packages/nextjs/contracts/deployedContracts.ts` | Stage-4a placeholder — ABIs from `forge build` for AnimalKingdomCard / PackShop / TraitShop at chainId 8453, addresses `0x000…000`. Stage 5 (deploy) regenerates with real addresses |
+| `packages/nextjs/contracts/externalContracts.ts` | USDC on Base mainnet with full ERC-20 ABI **including OZ v5 custom errors** (`ERC20InsufficientAllowance`, `ERC20InsufficientBalance`, `ERC20InvalidSpender`, etc.) so `getParsedError` decodes reverts into human messages |
+| `packages/nextjs/.env.example` | Documents Privy / Onramp / WS / Alchemy / WalletConnect env vars |
+| `README.md` | Replaced SE2 README with project description (full client-facing README ships in Stage `readme`) |
+
+### Cross-flow invariants implemented (Stage 7 ship-blockers, baked in)
+
+- Connect Wallet always renders as a `<button>` — `RainbowKitCustomConnectButton` is unchanged from SE2 (already correct).
+- Wrong-network shows the SE2 `WrongNetworkDropdown` "Switch network" button — already correct in the scaffold.
+- USDC approve spender is **exactly** the deployed `PackShop` address — verified end-to-end in `app/pack/page.tsx::PackCard::handleApprove`. The same `packShopAddress` is used both for the `approve(spender, amount)` call and is the address `transferFrom` is invoked from inside `buyPackUSDC` (verified in `packages/foundry/contracts/PackShop.sol:165`).
+- Approve button stays disabled through block confirmation **and** a 3-second cooldown after `useWaitForTransactionReceipt.isSuccess` flips. State-enforced — clicking is impossible during the cooldown.
+- USDC ABI in `externalContracts.ts` includes **`ERC20InsufficientAllowance`** and **`ERC20InsufficientBalance`** so reverts decode cleanly via `getParsedErrorWithAllAbis`.
+- All token amounts have USD context — `formatEthWithUsd` uses Coinbase's spot endpoint, `formatUsdc` is `1.00 USDC ≈ $1.00`.
+- Footer: SE2 branding fully removed (Fork-me / BuidlGuidl / Support links AND the `nativeCurrencyPrice` badge). The whole `Footer.tsx` was rewritten — verified the badge does NOT render on Base mainnet (the original footer rendered it everywhere).
+- Tab title template: `"%s | Animal Kingdom TCG"` (was `"%s | Scaffold-ETH 2"`).
+- `appName` in `wagmiConnectors.tsx` is `"Animal Kingdom TCG"` (was `"scaffold-eth-2"`) — affects the WalletConnect modal title.
+- Phantom added to RainbowKit wallet list.
+- `--radius-field` set to `0.5rem` in both theme blocks (was `1rem` — note: the original CLAUDE.md referenced `9999rem` but the SE2 v2.0.15 default was actually `1rem`; the `.btn` rule was `9999rem` and that has been fixed too).
+- Mobile `writeAndOpen` pattern wraps every write in `app/pack/page.tsx`, `app/traits/page.tsx`. 2s `setTimeout` after fire — focus event nudge.
+- No module-level `localStorage` access. No module-level `new WebSocket()`. The Battle page reads `gameServerWss` as a string only.
+- `app/_blockexplorer-disabled` rename from Stage 1 still in place — confirmed.
+- `useScaffoldEventHistory.ts:132` `deployedOnBlock` cast from Stage 1 still in place — confirmed.
+
+### Build issues encountered + fixes
+
+1. **Privy throws on placeholder app ID.** Initial implementation passed `"placeholder-app-id-not-configured"` when env was empty. Privy SDK rejects this with `Cannot initialize the Privy provider with an invalid Privy app ID`, breaking SSG prerender. **Fix:** wrap `<PrivyProvider>` conditionally in `ScaffoldEthAppWithProviders` and skip it entirely when `privyAppId` is empty. The `PrivyLoginButton` was also split into a presence-checking outer component and a hook-using inner component so `usePrivy()` is never called outside the provider tree.
+2. **Conditional Privy wallet hook violated rules of hooks.** Initial `useWriteAndOpen` tried `if (enabled) useWallets()`. **Fix:** dropped the embedded-wallet detection — the focus-nudge is harmless on embedded wallets, the cost of a missed deep-link on real mobile wallets is real. The hook now always nudges on `isMobileUserAgent()`.
+3. **`app/icon.tsx` rejected by static export.** Next.js requires `export const dynamic = "force-static"` for any non-page route under `output: "export"`. **Fix:** added it to the icon module.
+4. **TypeScript `Address` narrowing in localStorage object literal.** `PendingPurchase.buyer: \`0x\${string}\`` failed to assign from a `string`-narrowed prop. **Fix:** typed the field as `string` since it round-trips through JSON anyway.
+
+### Env vars the client must set (or accept the disabled state)
+
+| Env | Required for | If unset |
+| --- | --- | --- |
+| `NEXT_PUBLIC_PRIVY_APP_ID` | Email / Google sign-in + embedded wallets | Header `Sign In` button disabled with `(unavailable)` hint; RainbowKit `Connect Wallet` still works |
+| `NEXT_PUBLIC_ONRAMP_APP_ID` | Coinbase Onramp button on `/pack` | "Buy with USD" button disabled with helper text pointing to cdp.coinbase.com |
+| `NEXT_PUBLIC_GAME_SERVER_WSS` | Battle screen | `/battle` shows "server not configured" empty state; no WebSocket instantiated |
+| `NEXT_PUBLIC_PRODUCTION_URL` | Absolute OG image URLs in social previews | Falls back to `localhost:3000` for dev metadata |
+| `NEXT_PUBLIC_ALCHEMY_API_KEY` | Production-grade RPC | Uses SE2's shared default key (rate-limited) |
+| `NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID` | WalletConnect connector | Uses SE2's shared default ID |
+
+### What Stage 4b should pick up
+
+- Battle screen with the 5-state WS machine documented in USERJOURNEY.md flow 7. State must be `NOT_CONFIGURED` when `gameServerWss` is empty — no `new WebSocket()` calls module-level. All WS code in `useEffect`.
+- `/server/` folder skeleton: `package.json`, `src/index.ts` (WS server), `src/battle-engine.ts`, `src/pack-roll.ts`, `src/db.ts`, `.env.example`, README explaining Railway/Fly.io deploy + role grants.
+- The frontend already imports nothing from `/server/`. Battle UI will read from `wagmiConfig.gameServerWss` and connect lazily.
+
+### Pass/fail vs Stage 4a spec
+
+- [x] Privy + OnchainKit installed (`@privy-io/react-auth`, `@privy-io/wagmi`, `@coinbase/onchainkit`)
+- [x] Provider chain wired (Privy → wagmi → RainbowKit) with graceful fallback when Privy unconfigured
+- [x] `scaffold.config.ts` updated (Base mainnet, appName, pollingInterval, env reads)
+- [x] `wagmiConnectors.tsx` updated (appName, Phantom)
+- [x] `deployedContracts.ts` populated with placeholder addresses + real ABIs from `forge build`
+- [x] All 6 pages built (Home, Collection, Pack, Deck, Traits, Profile) + Battle stub
+- [x] Footer / Header / favicon / radius / tab title branding cleanup
+- [x] `.env.example` documents every env var
+- [x] Mobile `writeAndOpen` wrapper applied to all writes
+- [x] `yarn build` exits 0, static export to `packages/nextjs/out/` (15M, 12 routes)
+- [x] Committed and pushed as `clawdbotatg`
+
+---
+
 # 📋 PICK-UP-AND-CONTINUE GUIDE FOR THE NEXT AI SESSION
 
 **Read this section first if you're a new Claude Code session inheriting this build.**
@@ -326,7 +431,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `create_repo` (Stage 1) | ✅ done | `0xdcb54d09c7564692fe158ae309e9fba63083718a298e84651cef586bb6312730` |
 | `create_plan` (Stage 2 contracts compile) | ✅ done | `0xa3a60b30730f3efd7073e1ca5b6632bf1a04e457bcee5ed1018ff11519b878ef` |
 | `create_user_journey` (Stage 3 USERJOURNEY.md) | ✅ done | (logged by orchestrator after Stage 3 returned) |
-| `prototype` (frontend MVP) |  |  |
+| `prototype` (frontend MVP) | 🟡 PARTIAL — Stage 4a done (providers + 6 pages + branding); Stage 4b pending (battle screen + WS server) |  |
 | `contract_audit` |  |  |
 | `contract_fix` |  |  |
 | `frontend_audit` |  |  |
@@ -657,5 +762,5 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Opus subagent after Stage 3 (`create_user_journey`) completed. Edit this date when you append a new section.
+2026-04-28 by Opus subagent after Stage 4a (`prototype` — frontend MVP non-battle) completed. Edit this date when you append a new section.
 
