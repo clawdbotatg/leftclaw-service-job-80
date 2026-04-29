@@ -226,6 +226,78 @@ Forge-lint informational notes were also emitted (`mixed-case-function` on `buyP
 
 ---
 
+## Stage 3 — User Journey
+
+**Status:** PASS
+
+**Deliverable:** `USERJOURNEY.md` at the repo root.
+
+### What was written
+
+A single canonical document covering all 10 flows requested in the Stage 3 spec, each with explicit happy path AND error-state tables. Every error state names the exact UX surface (Toast / inline error banner / disabled button + helper text / empty state component / modal) so Stage 4 has zero ambiguity about what to render.
+
+The flows, in order:
+
+1. **First-time player onboarding (Privy email/Google)** — landing → Sign Up CTA → Privy modal → embedded wallet → first-pack prompt → routed to `/pack`
+2. **Crypto-native onboarding (RainbowKit)** — Connect button → wallet picker → wrong-network handled with explicit Switch button (one-step, never combined)
+3. **Buying a pack with fiat (Coinbase Onramp)** — pack picker → Buy with USD → Onramp widget → KYC → card → ETH delivery → auto-buy via `buyPack`. Error states: `NEXT_PUBLIC_ONRAMP_APP_ID` missing (button disabled with helper, NOT a crash), KYC declined, payment failed, ETH delivery delayed > 2 min, USDC delivered instead of ETH (auto-falls-through to Flow 5), gas-buffer too small (auto top-up).
+4. **Buying a pack with ETH** — `writeContract` `buyPack(packType)` with `value: priceWei`, mobile `writeAndOpen` 2s setTimeout, listen for `PackOpened` to drive reveal. Errors: insufficient ETH (disabled w/ helper + Buy ETH link), `PackInactive`, `EthForwardFailed`, event-never-arrives (graceful "creatures will appear" fallback).
+5. **Buying a pack with USDC** — explicit two-step Approve→Buy with: spender = `PackShop` address (the same address that calls `transferFrom`), 1-block + 2s cooldown before Buy enables, allowance recheck before Buy. Errors mapped to OZ v5 custom errors `ERC20InsufficientAllowance` / `ERC20InsufficientBalance`.
+6. **Building a deck** — collection grid via `tokenOfOwnerByIndex` + `tokenURI` parse, 4 tap-to-add slots, live team totals, save to localStorage. Edge cases: < 4 owned creatures (helper text disables save), duplicates allowed (Toast info), localStorage disabled (Safari Private Mode → warning Toast).
+7. **Entering a battle vs AI** — explicit 5-state WS state machine: NOT_CONFIGURED (empty state, NO `new WebSocket()` ever, defends static export), CONNECTING, CONNECTED idle, CONNECTED in match, RECONNECTING (banner + auto-retry), DISCONNECTED. Action selection with Momentum secondary commit, 30s turn timer, simultaneous reveal, server-authoritative resolution. Auto-defend on timeout.
+8. **Buying a trait** — TraitShop `buyTrait(tokenId, traitId)` with payable + ownership check + role-gated `fuseTrait` call. Specifically calls out the deploy-time misconfig case: TraitShop missing `TRAIT_FUSER_ROLE` → reverts with `AccessControlUnauthorizedAccount` (must be in the AnimalKingdomCard ABI for clean decode). 32-trait `MAX_TRAITS_PER_TOKEN` cap surfaced in UI.
+9. **Profile / match history** — chain-derived stats + game-server-derived match log; empty states for both. `<Address/>` component for the wallet, OpenSea links built against the deployed card address.
+10. **Mobile flows** — `writeAndOpen` 2-second setTimeout after every write call, RainbowKit deep-link recovery, reduced-motion fallback.
+
+### Cross-flow invariants section
+
+The document closes with an explicit "cross-flow invariants" section that pre-codifies every Stage-7 ship-blocker:
+- Connect button is always a `<button>`, never text
+- Wrong-network is one explicit Switch button, not a buried modal
+- Approve buttons hold disabled through block confirmation + 2s cooldown
+- USDC approve spender is exactly the PackShop address that calls `transferFrom`
+- All OZ v5 custom errors are listed by name and required in the frontend ABI
+- All token amounts have USD context
+- No module-level `localStorage` or `new WebSocket()` (defends static export, mirrors the `_blockexplorer-disabled` defensive pattern)
+
+### Decisions made (logged for the build)
+
+- **Duplicates allowed in deck building.** The contract supports it and the battle engine totals just multiply; we surface a small info Toast on the second add so the user knows, but it's not blocked. Build plan does not require uniqueness.
+- **Auto-buy after fiat onramp.** The fiat flow auto-fires `buyPack` once balance covers the price. User does NOT have to click again — explicit "we'll auto-buy" copy in the modal sets that expectation.
+- **Auto-fall-through fiat ETH→USDC.** If Onramp delivers USDC instead of ETH (config drift), the auto-buy switches to the USDC approve+buyPackUSDC flow seamlessly with copy update only. No error.
+- **Persisted pending pack purchase.** If a user closes the tab during delayed ETH delivery, we save the intent in `localStorage` and on next visit a banner offers to complete the purchase. Solves the "they paid but never got a pack" complaint.
+- **5-state WS machine (vs 3 or 4).** Explicit RECONNECTING + DISCONNECTED separation; reconnects auto-retry with exponential backoff up to 30s before flipping to DISCONNECTED. Battle actions are queued client-side and replayed with `actionId` for idempotency.
+- **Auto-defend on turn timeout.** Server-enforced; UI shows "Turn missed — auto-defended" so the user understands a flaky network didn't punish them.
+- **`NEXT_PUBLIC_GAME_SERVER_WSS` empty is a first-class state, not a hidden bug.** Battle screen renders a clear empty-state component with link to the README. Critically, no `new WebSocket()` ever runs in this branch — the same defensive discipline as the disabled block explorer.
+- **Fiat payment unavailable when `NEXT_PUBLIC_ONRAMP_APP_ID` is missing** — surfaced as a disabled button with helper text, not a crash. The crypto buttons remain active.
+
+### Files changed
+
+| Path | Change |
+| --- | --- |
+| `USERJOURNEY.md` | NEW — canonical user journey for all 10 flows |
+| `HANDOFF.md` | This Stage 3 section appended |
+
+No code, no contracts, no frontend, no deploys — Stage 4 picks those up.
+
+### Pass/fail vs Stage 3 spec
+
+- [x] All 10 requested flows covered with happy + error paths
+- [x] Every error state names the exact UX surface (Toast / inline / disabled button / empty state)
+- [x] Surface aligned with the actual contract surface in `packages/foundry/contracts/*.sol` (verified function names, payable signatures, custom errors)
+- [x] Mobile `writeAndOpen` pattern documented
+- [x] WS-not-configured state is a first-class branch with explicit no-WebSocket guarantee
+- [x] Cross-flow invariants section pre-codifies Stage 7 ship-blockers
+- [x] Committed and pushed as `clawdbotatg`
+
+### What Stage 4 (prototype) should pick up
+
+- USERJOURNEY.md at the repo root is the spec for what to render and how to handle errors. Build to it.
+- The cross-flow invariants section is the Stage 7 audit checklist, baked in early — implement those defensively from day 1, not as fix-ups.
+- The 5-state WS machine and the `NEXT_PUBLIC_GAME_SERVER_WSS` empty-state behavior is non-negotiable for static export safety. No module-level `new WebSocket()`.
+
+---
+
 # 📋 PICK-UP-AND-CONTINUE GUIDE FOR THE NEXT AI SESSION
 
 **Read this section first if you're a new Claude Code session inheriting this build.**
@@ -253,7 +325,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | acceptJob | ✅ done | `0xdb274ff2d246283b5f88d613d9092f3c05f26b083ff9161ea98a4e407f8c78c1` |
 | `create_repo` (Stage 1) | ✅ done | `0xdcb54d09c7564692fe158ae309e9fba63083718a298e84651cef586bb6312730` |
 | `create_plan` (Stage 2 contracts compile) | ✅ done | `0xa3a60b30730f3efd7073e1ca5b6632bf1a04e457bcee5ed1018ff11519b878ef` |
-| `create_user_journey` | ⏭ next |  |
+| `create_user_journey` (Stage 3 USERJOURNEY.md) | ✅ done | (logged by orchestrator after Stage 3 returned) |
 | `prototype` (frontend MVP) |  |  |
 | `contract_audit` |  |  |
 | `contract_fix` |  |  |
@@ -585,5 +657,5 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Sonnet orchestrator after Stage 2 completed. Edit this date when you append a new section.
+2026-04-28 by Opus subagent after Stage 3 (`create_user_journey`) completed. Edit this date when you append a new section.
 
