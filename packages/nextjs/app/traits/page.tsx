@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { NextPage } from "next";
 import { Address as AddressType } from "viem";
-import { useAccount, useReadContracts } from "wagmi";
+import { base } from "viem/chains";
+import { useAccount, useChainId, useReadContracts, useSwitchChain } from "wagmi";
 import { useDeployedContractInfo, useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
 import { useWriteAndOpen } from "~~/hooks/useWriteAndOpen";
 import { creatureEmoji, creatureName, fetchEthUsdPrice, formatEthWithUsd } from "~~/utils/animalKingdom";
@@ -127,6 +128,12 @@ const CreaturePickerModal = ({
   ethUsd: number | null;
   onClose: () => void;
 }) => {
+  // Issue #7 — wrong-network gate. The Buy & Fuse button must become a Switch CTA
+  // when the user is connected on a non-Base chain.
+  const chainId = useChainId();
+  const { switchChain, isPending: isSwitchingChain } = useSwitchChain();
+  const onWrongNetwork = Boolean(owner) && chainId !== base.id;
+
   const { data: balance } = useScaffoldReadContract({
     contractName: "AnimalKingdomCard",
     functionName: "balanceOf",
@@ -134,6 +141,24 @@ const CreaturePickerModal = ({
   });
   const balanceNum = balance !== undefined ? Number(balance) : 0;
   const { data: card } = useDeployedContractInfo({ contractName: "AnimalKingdomCard" });
+  const { data: traitShop } = useDeployedContractInfo({ contractName: "TraitShop" });
+
+  // Issue #9 — pre-check that the deployed TraitShop holds TRAIT_FUSER_ROLE on the
+  // card. If admin revoked the role (or the deploy script failed to grant it),
+  // `buyTrait` would revert with `AccessControlUnauthorizedAccount` AFTER the user
+  // paid gas. Surfacing the failure before the user clicks saves them ETH.
+  const { data: traitFuserRole } = useScaffoldReadContract({
+    contractName: "AnimalKingdomCard",
+    functionName: "TRAIT_FUSER_ROLE",
+  });
+  const { data: traitShopHasRole } = useScaffoldReadContract({
+    contractName: "AnimalKingdomCard",
+    functionName: "hasRole",
+    args: [traitFuserRole, traitShop?.address as `0x${string}` | undefined],
+  });
+  // Treat `undefined` (still loading) as OK so the modal isn't blocked on first paint.
+  // Only an explicit `false` from the contract gates the buy button.
+  const traitShopRoleOk = traitShopHasRole !== false;
 
   const indexCalls = useMemo(() => {
     if (!owner || !card || balanceNum === 0) return [];
@@ -219,6 +244,15 @@ const CreaturePickerModal = ({
           Price: <strong>{formatEthWithUsd(trait.priceWei, ethUsd)}</strong>. Pick the creature to fuse onto.
         </p>
 
+        {!traitShopRoleOk && (
+          <div className="alert alert-warning text-xs mb-3">
+            <span>
+              Trait fusing is temporarily unavailable: the trait shop has not been granted permission to fuse traits on
+              the card contract. The game admin needs to grant <code>TRAIT_FUSER_ROLE</code> to the trait shop.
+            </span>
+          </div>
+        )}
+
         {balanceNum === 0 ? (
           <div className="text-center py-6">
             <p className="opacity-70 mb-3">You don&apos;t own any creatures yet.</p>
@@ -254,14 +288,26 @@ const CreaturePickerModal = ({
           <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={!selected || traitsMaxed || isMining}
-            onClick={handleBuy}
-          >
-            {isMining ? <span className="loading loading-spinner loading-xs" /> : "Buy & Fuse"}
-          </button>
+          {onWrongNetwork ? (
+            // Issue #7 — wrong-network gate replaces the Buy CTA with Switch.
+            <button
+              type="button"
+              className="btn btn-warning btn-sm"
+              disabled={isSwitchingChain}
+              onClick={() => switchChain({ chainId: base.id })}
+            >
+              {isSwitchingChain ? <span className="loading loading-spinner loading-xs" /> : "Switch to Base"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!selected || traitsMaxed || isMining || !traitShopRoleOk}
+              onClick={handleBuy}
+            >
+              {isMining ? <span className="loading loading-spinner loading-xs" /> : "Buy & Fuse"}
+            </button>
+          )}
         </div>
       </div>
       <div className="modal-backdrop" onClick={onClose} />

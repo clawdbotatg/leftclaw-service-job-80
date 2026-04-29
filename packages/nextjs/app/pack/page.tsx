@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { NextPage } from "next";
 import { Address as AddressType, formatUnits } from "viem";
-import { useAccount, useReadContracts, useWaitForTransactionReceipt } from "wagmi";
+import { base } from "viem/chains";
+import { useAccount, useChainId, useReadContracts, useSwitchChain, useWaitForTransactionReceipt } from "wagmi";
 import {
   useDeployedContractInfo,
   useScaffoldEventHistory,
@@ -15,6 +16,14 @@ import { useWriteAndOpen } from "~~/hooks/useWriteAndOpen";
 import scaffoldConfig from "~~/scaffold.config";
 import { buildOnrampBuyUrl, fetchEthUsdPrice, formatEthWithUsd, formatUsdc } from "~~/utils/animalKingdom";
 import { notification } from "~~/utils/scaffold-eth";
+
+// Baseline block for `useScaffoldEventHistory`. Stage 5 will redeploy and update
+// `deployedContracts.ts` with a real `deployedOnBlock` (the scaffold hook prefers
+// that value when present); until then we use a hardcoded recent baseline so we
+// don't ask Alchemy to scan the entire Base history per page mount.
+// Base head as of Stage 7 audit is ~45.3M; 45M is a safe lower bound for any
+// deploy that will happen in Stage 5 or later.
+const BASE_EVENT_HISTORY_FALLBACK_BLOCK = 45_000_000n;
 
 const PACK_IDS_TO_CHECK: readonly number[] = [1, 2, 3, 4, 5];
 
@@ -170,6 +179,13 @@ const PackCard = ({
   ethUsd: number | null;
   onPurchaseSettled: () => void;
 }) => {
+  // Wrong-network gate (QA SKILL ship-blocker, Issue #7): when connected on a non-Base
+  // chain, the primary CTA must be a Switch button — not a disabled Buy or a header-only
+  // dropdown. We render a single Switch CTA in the same slot as the buy stack.
+  const chainId = useChainId();
+  const { switchChain, isPending: isSwitchingChain } = useSwitchChain();
+  const onWrongNetwork = Boolean(buyer) && chainId !== base.id;
+
   const { writeContractAsync: writePack, isMining: isBuyingEth } = useScaffoldWriteContract({
     contractName: "PackShop",
   });
@@ -201,6 +217,12 @@ const PackCard = ({
   const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>();
   const { isSuccess: approveConfirmed } = useWaitForTransactionReceipt({ hash: approveTxHash });
   const [cooldownActive, setCooldownActive] = useState(false);
+  // Issue #14 — explicit `approvalSubmitting` state per QA SKILL pattern.
+  // Bridges the click→hash gap and the wait-for-receipt path so `isApproving`
+  // (from the scaffold hook) plus `cooldownActive` (after receipt) plus this
+  // flag never have a window where they're all simultaneously false while the
+  // approve transaction is in-flight.
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
   useEffect(() => {
     if (!approveConfirmed) return;
     setCooldownActive(true);
@@ -249,6 +271,8 @@ const PackCard = ({
 
   const handleApprove = async () => {
     if (!buyer || !packShopAddress) return;
+    if (approvalSubmitting || cooldownActive) return;
+    setApprovalSubmitting(true);
     try {
       const hash = await writeAndOpen(() =>
         writeUsdcApprove({
@@ -259,6 +283,8 @@ const PackCard = ({
       if (hash) setApproveTxHash(hash);
     } catch (e) {
       console.error(e);
+    } finally {
+      setApprovalSubmitting(false);
     }
   };
 
@@ -282,7 +308,13 @@ const PackCard = ({
 
   const ethDisabled = pack.priceWei === 0n;
   const usdcDisabled = pack.priceUsdc === 0n;
-  const buyUsdcDisabled = usdcDisabled || !allowanceEnough || !usdcBalanceEnough || cooldownActive || isBuyingUsdc;
+  // Issue #14 — single derived disabled boolean covering the full
+  // approve→cooldown→buy flow. `approvalSubmitting` is the explicit
+  // click→hash window; `cooldownActive` is the receipt→cache window;
+  // `isBuyingUsdc` is the buy itself. With this gate the Buy button is
+  // never clickable mid-approval.
+  const buyUsdcDisabled =
+    usdcDisabled || !allowanceEnough || !usdcBalanceEnough || approvalSubmitting || cooldownActive || isBuyingUsdc;
 
   // Validate spender end-to-end: the address passed to USDC.approve here is exactly
   // `packShopAddress`, which is the address PackShop calls `transferFrom` from inside
@@ -308,49 +340,68 @@ const PackCard = ({
       </div>
 
       <div className="flex flex-col gap-2 mt-2">
-        <button
-          className="btn btn-primary btn-sm"
-          disabled={!buyer || ethDisabled || isBuyingEth}
-          onClick={handleBuyEth}
-          type="button"
-        >
-          {isBuyingEth ? <span className="loading loading-spinner loading-xs" /> : "Buy with ETH"}
-        </button>
-        {ethDisabled && <span className="text-xs opacity-60">ETH purchases disabled for this pack.</span>}
-
-        {!usdcDisabled && (
+        {onWrongNetwork ? (
+          // Issue #7 — wrong-network gate. When connected to a non-Base chain, the
+          // primary CTA in this slot must become a Switch button. The header dropdown
+          // alone is not sufficient (per QA SKILL ship-blocker — one-button-at-a-time).
           <>
-            {!allowanceEnough && (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={handleApprove}
-                disabled={!buyer || isApproving || cooldownActive}
-                type="button"
-              >
-                {isApproving ? (
-                  <span className="loading loading-spinner loading-xs" />
-                ) : cooldownActive ? (
-                  "Waiting for approval to settle…"
-                ) : (
-                  `Approve ${formatUnits(pack.priceUsdc, 6)} USDC`
-                )}
-              </button>
-            )}
             <button
-              className="btn btn-accent btn-sm"
-              disabled={!buyer || buyUsdcDisabled}
-              onClick={handleBuyUsdc}
+              className="btn btn-warning btn-sm"
+              type="button"
+              disabled={isSwitchingChain}
+              onClick={() => switchChain({ chainId: base.id })}
+            >
+              {isSwitchingChain ? <span className="loading loading-spinner loading-xs" /> : "Switch to Base to buy"}
+            </button>
+            <span className="text-xs opacity-60">Animal Kingdom TCG runs on Base mainnet.</span>
+          </>
+        ) : (
+          <>
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={!buyer || ethDisabled || isBuyingEth}
+              onClick={handleBuyEth}
               type="button"
             >
-              {isBuyingUsdc ? <span className="loading loading-spinner loading-xs" /> : "Buy with USDC"}
+              {isBuyingEth ? <span className="loading loading-spinner loading-xs" /> : "Buy with ETH"}
             </button>
-            {!allowanceEnough && (
-              <span className="text-xs opacity-60">Approve USDC, wait one block + cooldown, then Buy.</span>
-            )}
-            {!usdcBalanceEnough && allowanceEnough && (
-              <span className="text-xs text-error">
-                You need {formatUnits(pack.priceUsdc - (usdcBalance ?? 0n), 6)} more USDC.
-              </span>
+            {ethDisabled && <span className="text-xs opacity-60">ETH purchases disabled for this pack.</span>}
+
+            {!usdcDisabled && (
+              <>
+                {!allowanceEnough && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleApprove}
+                    disabled={!buyer || isApproving || approvalSubmitting || cooldownActive}
+                    type="button"
+                  >
+                    {isApproving || approvalSubmitting ? (
+                      <span className="loading loading-spinner loading-xs" />
+                    ) : cooldownActive ? (
+                      "Waiting for approval to settle…"
+                    ) : (
+                      `Approve ${formatUnits(pack.priceUsdc, 6)} USDC`
+                    )}
+                  </button>
+                )}
+                <button
+                  className="btn btn-accent btn-sm"
+                  disabled={!buyer || buyUsdcDisabled}
+                  onClick={handleBuyUsdc}
+                  type="button"
+                >
+                  {isBuyingUsdc ? <span className="loading loading-spinner loading-xs" /> : "Buy with USDC"}
+                </button>
+                {!allowanceEnough && (
+                  <span className="text-xs opacity-60">Approve USDC, wait one block + cooldown, then Buy.</span>
+                )}
+                {!usdcBalanceEnough && allowanceEnough && (
+                  <span className="text-xs text-error">
+                    You need {formatUnits(pack.priceUsdc - (usdcBalance ?? 0n), 6)} more USDC.
+                  </span>
+                )}
+              </>
             )}
           </>
         )}
@@ -418,7 +469,12 @@ const PackOpenedListener = ({ buyer }: { buyer: AddressType | undefined }) => {
     contractName: "AnimalKingdomCard",
     eventName: "CreatureMinted",
     watch: true,
-    fromBlock: 0n,
+    // Issue #13 — never scan from block 0 of Base mainnet. Use the recent
+    // baseline so Alchemy isn't asked to chunk hundreds of millions of blocks.
+    // The scaffold hook prefers `deployedOnBlock` from `deployedContracts.ts`
+    // when set; this baseline is the floor for any deploy that hasn't yet
+    // populated that field.
+    fromBlock: BASE_EVENT_HISTORY_FALLBACK_BLOCK,
     filters: { to: buyer },
     blockData: false,
   });
