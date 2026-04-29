@@ -625,7 +625,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `frontend_audit` | ✅ done — 2 ship-blockers + 6 should-fix issues filed |  |
 | `frontend_fix` | ✅ done — all 8 issues (#7-#14) closed; yarn build + forge test pass |  |
 | `full_audit` / `full_audit_fix` |  |  |
-| `deploy_contract` |  |  |
+| `deploy_contract` | ✅ done — 3 contracts deployed to Base mainnet, Sourcify exact_match verified |  |
 | `livecontract_fix` |  |  |
 | `deploy_app` (bgipfs) |  |  |
 | `liveapp_fix` |  |  |
@@ -950,7 +950,7 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Opus subagent after Stage 8 (`frontend_fix`) completed — all 8 frontend-audit issues closed. Edit this date when you append a new section.
+2026-04-29 by Opus subagent after Stage 9 (`deploy_contract`) completed — 3 contracts deployed to Base mainnet, all verified on Sourcify (exact_match). Edit this date when you append a new section.
 
 ---
 
@@ -1367,4 +1367,143 @@ No contract code changed. No deploys. No bgipfs upload — those remain Stage 5 
 - After deploy, regenerate `packages/nextjs/contracts/deployedContracts.ts` so `deployedOnBlock` is populated. The scaffold hook prefers that value over `BASE_EVENT_HISTORY_FALLBACK_BLOCK`.
 - Verify on Basescan: `yarn verify --network base`. Confirm green checkmarks.
 - Then come back to Stage 9 (`deploy_app`) and run `npx bgipfs upload packages/nextjs/out`.
+
+---
+
+## Stage 9 — Deploy Contracts
+
+**Status:** PASS — all 3 contracts deployed to Base mainnet (chain id 8453) and verified on Sourcify with `exact_match` (creation + runtime). Frontend `deployedContracts.ts` regenerated; `yarn build` exits 0 with the new addresses.
+
+### Deployed contracts
+
+| Contract | Address | Basescan | Sourcify |
+| --- | --- | --- | --- |
+| `AnimalKingdomCard` | `0x230f1fFD190c1ae36E14950a935669F708D3b2BE` | https://basescan.org/address/0x230f1fFD190c1ae36E14950a935669F708D3b2BE | https://sourcify.dev/server/v2/contract/8453/0x230f1fFD190c1ae36E14950a935669F708D3b2BE — `exact_match` |
+| `PackShop` | `0xf03B6995BAC12EbaF7E98f681Fd2d5a7a339cFC7` | https://basescan.org/address/0xf03B6995BAC12EbaF7E98f681Fd2d5a7a339cFC7 | https://sourcify.dev/server/v2/contract/8453/0xf03B6995BAC12EbaF7E98f681Fd2d5a7a339cFC7 — `exact_match` |
+| `TraitShop` | `0xaee554CC577310D300ff388F40e2B1cE4D46e01A` | https://basescan.org/address/0xaee554CC577310D300ff388F40e2B1cE4D46e01A | https://sourcify.dev/server/v2/contract/8453/0xaee554CC577310D300ff388F40e2B1cE4D46e01A — `exact_match` |
+
+**Constructor args:**
+- `AnimalKingdomCard(admin = 0xFE968dE21eb0E77d5877477C31a04A3075c0086E)` — client is sole DEFAULT_ADMIN_ROLE / MINTER_ROLE / TRAIT_FUSER_ROLE holder; `AccessControlDefaultAdminRules` 3-day delay.
+- `PackShop(admin = 0xFE968dE21eb0E77d5877477C31a04A3075c0086E, usdcToken = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)` — Base mainnet USDC.
+- `TraitShop(admin = 0xFE968dE21eb0E77d5877477C31a04A3075c0086E, cardAddr = 0x230f1fFD190c1ae36E14950a935669F708D3b2BE)`.
+
+**Deployer (worker):** `0x5430757ee25f25D11987B206C1789d394a779200` — pre-deploy balance ~0.004682 ETH, post-deploy balance ~0.004643 ETH. Spend ≈ 0.0000385 ETH for all three deploys (Base gas was ~0.011 gwei).
+
+**Broadcast file:** `packages/foundry/broadcast/Deploy.s.sol/8453/run-latest.json` (committed).
+
+### Verification status
+
+`forge script ... --verify` defaulted to **Sourcify** (no `ETHERSCAN_API_KEY` was set in the worker `.env`). All three contracts verified with `exact_match` on creation bytecode + runtime bytecode. Basescan reads Sourcify and surfaces verified source code via the "Similar Match Source Code (via Sourcify)" panel — green checkmark equivalent. CLAUDE.md notes "no Basescan API key needed" for `yarn verify --network base`; in practice, modern forge defaults to Sourcify when no Etherscan key is provided, which is acceptable per the audit rule "exact match or partial match — both are acceptable."
+
+### Smoke tests (live, against Base mainnet)
+
+```
+RPC=$ALCHEMY_RPC_URL  # Alchemy Base mainnet
+CARD=0x230f1fFD190c1ae36E14950a935669F708D3b2BE
+PACKSHOP=0xf03B6995BAC12EbaF7E98f681Fd2d5a7a339cFC7
+TRAITSHOP=0xaee554CC577310D300ff388F40e2B1cE4D46e01A
+CLIENT=0xFE968dE21eb0E77d5877477C31a04A3075c0086E
+USDC=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+```
+
+| # | Call | Expected | Actual | Pass |
+| - | ---- | -------- | ------ | ---- |
+| 1 | `card.defaultAdmin()` | `CLIENT` | `0xFE968dE21eb0E77d5877477C31a04A3075c0086E` | ✅ |
+| 2 | `card.owner()` | `CLIENT` | `0xFE968dE21eb0E77d5877477C31a04A3075c0086E` | ✅ |
+| 3 | `packShop.owner()` | `CLIENT` | `0xFE968dE21eb0E77d5877477C31a04A3075c0086E` | ✅ |
+| 4 | `traitShop.owner()` | `CLIENT` | `0xFE968dE21eb0E77d5877477C31a04A3075c0086E` | ✅ |
+| 5 | `traitShop.card()` | `CARD` | `0x230f1fFD190c1ae36E14950a935669F708D3b2BE` | ✅ |
+| 6 | `packShop.usdc()` | `USDC` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | ✅ |
+| 7 | `card.hasRole(TRAIT_FUSER_ROLE, traitShop)` | `false` (client must grant) | `false` | ✅ |
+
+### Files touched in Stage 9
+
+| Path | Change |
+| --- | --- |
+| `packages/foundry/script/DeployAnimalKingdom.s.sol` | NEW — deploys all three contracts with `client` as admin/owner. Reads `CLIENT_ADDRESS` / `USDC_ADDRESS` from env with sane defaults. No role grants, no pack/trait seeding (those are client actions). |
+| `packages/foundry/script/Deploy.s.sol` | Replaced `DeployYourContract` invocation with `DeployAnimalKingdom`. |
+| `packages/foundry/foundry.toml` | `[rpc_endpoints] base` switched from public `mainnet.base.org` to `${ALCHEMY_RPC_URL}` (CLAUDE.md hard rule: never public RPCs). Added `[etherscan] base` block for Etherscan v2 unified API (chain 8453) — reserved for future API-keyed verification; current run used Sourcify. |
+| `packages/nextjs/contracts/deployedContracts.ts` | Regenerated by `scripts-js/generateTsAbis.js`. Contains the three Animal Kingdom contracts on chain `8453` with full ABIs and `deployedOnBlock` populated. |
+| `packages/foundry/broadcast/Deploy.s.sol/8453/*` | Forge broadcast artifacts (transactions + receipts). |
+| `packages/foundry/deployments/8453.json` | SE2 deployment registry (3 entries: Card / PackShop / TraitShop). |
+
+### Build outcomes
+
+- `cd packages/foundry && forge build` → exit 0 (only forge-lint notes; no errors).
+- `cd packages/nextjs && yarn build` → exit 0 (12/12 static pages generated; `out/` directory populated). The `@farcaster/mini-app-solana` warning is a pre-existing Privy peer-dep transitive missing-module warning carried over from prior stages — non-blocking, build still succeeds.
+
+### Why ADAR forces a client-side role grant
+
+`AnimalKingdomCard` inherits `AccessControlDefaultAdminRules` (Stage 6 fix). ADAR's admin transfer takes 3 days via a `beginDefaultAdminTransfer` / `acceptDefaultAdminTransfer` flow. So the deploy script could NOT atomically: (a) deploy with deployer as admin, (b) grant `TRAIT_FUSER_ROLE` to TraitShop, (c) transfer admin to client. Instead, the constructor sets `client` as admin from the very first transaction; the worker holds zero roles end-to-end. Granting `TRAIT_FUSER_ROLE` to TraitShop is a documented client post-deploy step.
+
+### CLIENT POST-DEPLOY ACTIONS (REQUIRED before TraitShop works)
+
+The deployer (worker) is intentionally NOT in any role. The client (`0xFE968dE21eb0E77d5877477C31a04A3075c0086E`) must run the steps below from a wallet that holds DEFAULT_ADMIN_ROLE for the card, i.e. the same `0xFE968d…086E` address.
+
+Substitute `<CLIENT_PK>` with the client's private key (or use a hardware-wallet equivalent like `cast send --ledger` / Safe), and `<RPC>` with any Base mainnet RPC (Alchemy recommended).
+
+1. **Grant `TRAIT_FUSER_ROLE` to TraitShop** — without this, `TraitShop.buyTrait` reverts on the `card.fuseTrait` call:
+   ```bash
+   cast send 0x230f1fFD190c1ae36E14950a935669F708D3b2BE \
+     "grantRole(bytes32,address)" \
+     $(cast keccak "TRAIT_FUSER_ROLE") \
+     0xaee554CC577310D300ff388F40e2B1cE4D46e01A \
+     --rpc-url <RPC> --private-key <CLIENT_PK>
+   ```
+
+2. **Grant `MINTER_ROLE` to your hot wallet** (the address that watches `PackPurchased` events and calls `batchMintPack`):
+   ```bash
+   cast send 0x230f1fFD190c1ae36E14950a935669F708D3b2BE \
+     "grantRole(bytes32,address)" \
+     $(cast keccak "MINTER_ROLE") \
+     <HOT_WALLET> \
+     --rpc-url <RPC> --private-key <CLIENT_PK>
+   ```
+
+3. **Add at least one pack to `PackShop`** — until at least one pack is `active`, `buyPack` / `buyPackUSDC` revert with `PackInactive`. Example: starter pack at 0.001 ETH or 1 USDC:
+   ```bash
+   # priceWei = 0.001 ETH; priceUsdc = 1_000_000 (1 USDC, USDC is 6 decimals)
+   cast send 0xf03B6995BAC12EbaF7E98f681Fd2d5a7a339cFC7 \
+     "addPack(uint8,uint256,uint256,string)" \
+     1 1000000000000000 1000000 "Starter Pack" \
+     --rpc-url <RPC> --private-key <CLIENT_PK>
+   ```
+
+4. **Seed the trait catalog on `TraitShop`** — see `server/scripts/seed-traits.ts` for the canonical catalog. Per-trait:
+   ```bash
+   cast send 0xaee554CC577310D300ff388F40e2B1cE4D46e01A \
+     "addTrait(uint256,uint256,string)" \
+     <traitId> <priceWei> "<metadataURI>" \
+     --rpc-url <RPC> --private-key <CLIENT_PK>
+   ```
+
+5. **(Optional) Set `imageBaseURI`** if hosting card artwork on IPFS — required for marketplaces / `<img>` tags to resolve `${baseURI}${creatureId}.png`:
+   ```bash
+   cast send 0x230f1fFD190c1ae36E14950a935669F708D3b2BE \
+     "setImageBaseURI(string)" \
+     "ipfs://<cid>/" \
+     --rpc-url <RPC> --private-key <CLIENT_PK>
+   ```
+
+### Pass/fail vs Stage 9 spec
+
+- [x] `DeployAnimalKingdom.s.sol` written and matches existing SE2 deploy pattern (`ScaffoldEthDeployerRunner` modifier + `deployments` array push)
+- [x] `Deploy.s.sol` updated to invoke `DeployAnimalKingdom`
+- [x] `foundry.toml` `[rpc_endpoints] base` points to Alchemy (no public RPC fallback)
+- [x] `foundry.toml` has `[etherscan] base` block (chain 8453, Etherscan v2 unified URL)
+- [x] All 3 contracts deployed to Base mainnet
+- [x] All 3 contracts verified (Sourcify exact_match — creation + runtime; Basescan surfaces via Sourcify)
+- [x] All 7 smoke tests pass
+- [x] `deployedContracts.ts` regenerated
+- [x] `yarn build` in `packages/nextjs` exits 0
+- [x] No `.env` containing `PRIVATE_KEY` exists in the repo (foundry `.env` is the SE2 default with `ALCHEMY_API_KEY` / `ETHERSCAN_API_KEY` / `LOCALHOST_KEYSTORE_ACCOUNT` only — gitignored, no PK)
+- [x] No source modifications to contracts
+- [x] No client-action functions called by the worker (no `addPack`, no `grantRole`, no `addTrait`)
+- [x] Stop conditions respected — did NOT upload to bgipfs; that is Stage `deploy_app`
+
+### What Stage `deploy_app` (bgipfs) should pick up
+
+- The new `out/` directory at `packages/nextjs/out/` already includes the live mainnet contract addresses inside its bundled JS (regenerated `deployedContracts.ts` was baked in at build time).
+- Run `npx bgipfs upload packages/nextjs/out` from the project root. Confirm the new CID is different from any prior CID before reporting done.
+- Live URL form: `https://<CID>.ipfs.community.bgipfs.com/`. Validate with `curl -I` (expect HTTP 200) and a quick browser check that the connect button renders and the pack/trait pages don't 404.
 

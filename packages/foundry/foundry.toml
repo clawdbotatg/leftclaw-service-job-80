@@ -23,7 +23,7 @@ polygonZkEvm = "https://zkevm-rpc.com"
 polygonZkEvmTestnet = "https://rpc.public.zkevm-test.net"
 gnosis = "https://rpc.gnosischain.com"
 chiado = "https://rpc.chiadochain.net"
-base = "https://mainnet.base.org"
+base = "${ALCHEMY_RPC_URL}"
 baseSepolia = "https://sepolia.base.org"
 scrollSepolia = "https://sepolia-rpc.scroll.io"
 scroll = "https://rpc.scroll.io"
@@ -36,6 +36,7 @@ localhost = "http://127.0.0.1:8545"
 [etherscan]
 polygonMumbai = { key = "${ETHERSCAN_API_KEY}" }
 sepolia = { key = "${ETHERSCAN_API_KEY}" }
+base = { key = "${ETHERSCAN_API_KEY}", chain = 8453, url = "https://api.etherscan.io/v2/api?chainid=8453" }
 
 
 
