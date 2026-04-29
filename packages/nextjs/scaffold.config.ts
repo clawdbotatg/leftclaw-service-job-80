@@ -21,9 +21,9 @@ export const DEFAULT_ALCHEMY_API_KEY = "cR4WnXePioePZ5fFrnSiR";
 const scaffoldConfig = {
   // Animal Kingdom TCG ships only on Base mainnet.
   targetNetworks: [chains.base],
-  // ~4s polling fits Base block time without hammering the RPC. Shorter than the SE2
-  // default to keep the UI responsive on an L2 where blocks come every 2s.
-  pollingInterval: 4000,
+  // 3s polling per QA SKILL recommendation — keeps the UI feeling responsive on
+  // Base (2s blocks) without hammering Alchemy. (Issue #12)
+  pollingInterval: 3000,
   alchemyApiKey: process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || DEFAULT_ALCHEMY_API_KEY,
   rpcOverrides: {},
   walletConnectProjectId: process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID || "3a8170812b534d0ff9d794f19a901d64",

@@ -1,5 +1,6 @@
 import React from "react";
 import Link from "next/link";
+import { Address } from "@scaffold-ui/components";
 import { SwitchTheme } from "~~/components/SwitchTheme";
 import deployedContracts from "~~/contracts/deployedContracts";
 
@@ -11,7 +12,6 @@ const cardAddress: string | undefined =
     ?.address;
 
 const GITHUB_URL = "https://github.com/clawdbotatg/leftclaw-service-job-80";
-const BASESCAN_BASE_URL = "https://basescan.org";
 
 /**
  * Site footer — Animal Kingdom TCG
@@ -19,6 +19,9 @@ const BASESCAN_BASE_URL = "https://basescan.org";
  * Replaces the SE2 default footer entirely (Fork-me / BuidlGuidl / Support links and the
  * `useFetchNativeCurrencyPrice` badge are removed; the badge rendered on every network
  * including Base mainnet, which is a CLAUDE.md ship-blocker).
+ *
+ * Contract address rendered with the SE2 `<Address/>` component (Issue #10) so users see
+ * the truncated address with blockie, copy button, and explorer link inline.
  */
 export const Footer = () => {
   return (
@@ -37,14 +40,10 @@ export const Footer = () => {
         {cardAddress && (
           <>
             <span className="hidden md:inline">·</span>
-            <Link
-              href={`${BASESCAN_BASE_URL}/address/${cardAddress}`}
-              target="_blank"
-              rel="noreferrer"
-              className="link"
-            >
-              Card contract
-            </Link>
+            <span className="flex items-center gap-1">
+              <span className="opacity-70">Card:</span>
+              <Address address={cardAddress as `0x${string}`} size="xs" />
+            </span>
           </>
         )}
       </div>

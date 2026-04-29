@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { NextPage } from "next";
 import { useAccount } from "wagmi";
+import { RainbowKitCustomConnectButton } from "~~/components/scaffold-eth";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
 const Home: NextPage = () => {
@@ -39,7 +40,13 @@ const Home: NextPage = () => {
               </Link>
             </>
           ) : (
-            <p className="text-sm opacity-70">Sign in or connect a wallet from the top-right to begin.</p>
+            // Issue #11 — render the actual Connect button as the primary CTA, not a
+            // paragraph telling the user where to look. Reuses the same component the
+            // header uses so the connect modal behavior is identical.
+            <div className="flex flex-col items-center gap-2">
+              <RainbowKitCustomConnectButton />
+              <p className="text-xs opacity-60">Connect a wallet to start collecting creatures.</p>
+            </div>
           )}
         </div>
       </section>
