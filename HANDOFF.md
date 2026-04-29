@@ -403,6 +403,194 @@ Six pages under `packages/nextjs/app/` (Home, Collection, Pack Shop, Deck, Trait
 
 ---
 
+## Stage 4b — Battle Screen + WS Server
+
+**Status:** PASS
+
+**Build cmd (frontend):** `cd packages/nextjs && NEXT_PUBLIC_IPFS_BUILD=true NODE_OPTIONS="--require ./polyfill-localstorage.cjs" yarn build` — exit 0. `/battle` route now compiles to **4.88 kB** (was a 145B stub). 12 routes total still prerender clean.
+
+**Server typecheck:** `cd /server && npx tsc --noEmit` — exit 0. The /server/ project is committed as a complete Node app the client deploys themselves on Railway / Fly.io.
+
+### What was built — frontend
+
+The `/battle` page now implements the **5-state WS state machine** documented in USERJOURNEY.md flow 7:
+
+- **NOT_CONFIGURED** — when `scaffoldConfig.gameServerWss` is empty. Shows a clear empty-state card + a disabled "Find AI Match" button. **No WebSocket is ever instantiated** in this branch — `BattleClient` only mounts when `isConfigured` is true. Same defensive discipline as the disabled block explorer; static export does not crash on missing env.
+- **CONNECTING** — initial WS attempt. Spinner + "Connecting to battle server…"
+- **CONNECTED_IDLE** — connected, awaiting match. Lobby UI with deck dropdown (read from `localStorage` via `akc:decks:<lowercase-address>`) and "Find AI Match" button. Empty state with `Go to Deck Builder` CTA when the user has no saved decks.
+- **CONNECTED_IN_MATCH** — full battle UI: opponent HP + team stat badges + active Trick name + Momentum on top, shared reveal panel in the middle with a 30s turn timer, your HP + team stats + Momentum + 3 action buttons (Attack/Defend/Charge) on the bottom, and a collapsible match-log sidebar.
+- **RECONNECTING** — connection dropped mid-state. A yellow alert banner shows "Connection lost — reconnecting (attempt N/6)…" overlaid above the last-known battle state. Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s cap, gives up after 6 attempts.
+- **DISCONNECTED** — gave up. Card with "Refresh to retry" button.
+
+**Auth on connect:** when `scaffoldConfig.privyAppId` is set, the page sends `{type: 'auth', token: <window.__privyAccessToken>}` (best-effort access via the global the SDK installs once authenticated — we do NOT statically import `getAccessToken` because that would pull the Privy SDK into the static-export tree even when unconfigured). When Privy is NOT set, sends `{type: 'auth', address: connectedAddress}` (or zero-address for unconnected). **v1 only**: address-auth is insecure and is documented as such here and in `/server/auth.ts`. Stage 7 will require a SIWE flow (server issues nonce → client signs → server verifies via `viem.verifyMessage`) before the address-auth path can be considered production-ready. The protocol shape is forward-compatible — `AuthAddressMessage` already has an optional `signature` field.
+
+**Match flow UI:**
+- Pre-match lobby: deck `<select>` + "Find AI Match" button.
+- Action commit: Attack / Defend / Charge buttons. If Momentum > 0, a secondary `<dialog>` modal pops up to commit the momentum to ATK / DEF / TRK or skip — both choices send in one `submit_action` message.
+- After commit, action buttons disable; "Waiting for opponent…" spinner inside the reveal panel.
+- On `turn_reveal` from server, both choices fade in with damage numbers; HP bars animate (CSS transitions); next turn starts.
+- Match-end modal shows Victory/Defeat/Draw banner + summary (turns, damage dealt, damage taken, MVP) + "Play again" → CONNECTED_IDLE / "Home" buttons.
+- 30s turn timer with countdown; at 0 the server auto-defends per USERJOURNEY decision (frontend never auto-submits — it just shows the timer).
+
+**Static-export safety guarantees:**
+- `new WebSocket(...)` is **never** at module scope. The constructor is wrapped in a `try/catch` inside `connect()` which is itself called from `useEffect`.
+- `window.localStorage` reads (saved decks) are inside `useEffect`, gated on `connectedAddress`.
+- Cleanup is comprehensive: unmount sets `unmountedRef.current = true`, clears all timers (auth-timeout, reconnect, heartbeat, turn-timer), and closes the socket. No stale-closure setState — every callback checks `unmountedRef.current` before touching state.
+
+### What was built — `/server/`
+
+Complete Node WebSocket server, separate from the yarn workspace, intended for the client to deploy. Repo layout:
+
+```
+/server/
+├── package.json          (name: animal-kingdom-server, deps: ws, viem, pg, dotenv, zod, pino, @privy-io/server-auth)
+├── tsconfig.json         (ES2022 module, strict)
+├── README.md             (full Railway / Fly.io deploy guide + role-grant cast cmds)
+├── .env.example          (every env var documented)
+├── .gitignore            (node_modules, .env, dist, logs)
+├── src/
+│   ├── index.ts          WS server entry — auth handler + match registry + heartbeat
+│   ├── battle-engine.ts  turn loop + damage formula + Trick effects + match-end conditions
+│   ├── pack-roll.ts      viem watchContractEvent on PackPurchased → batchMintPack with retry
+│   ├── creatures.ts      16-creature template table (id → name + base stats + Trick effect)
+│   ├── traits.ts         8-trait template table (id → name + ETH price + metadataURI)
+│   ├── ai.ts             4 AI deck templates + weighted-random behavior tree
+│   ├── db.ts             pg.Pool + migrations runner
+│   ├── auth.ts           Privy token validation OR address-only stub (with explicit Stage 7 SIWE TODO)
+│   ├── chain.ts          viem PublicClient + WalletClient + minimal ABIs
+│   ├── logger.ts         pino with pretty in dev, JSON in prod
+│   └── types.ts          mirror of packages/nextjs/types/battle.ts (must stay in sync)
+├── migrations/
+│   └── 001_init.sql      players / creatures_cache / decks / matches / earned_trait_progress
+└── scripts/
+    ├── seed-pack-pool.ts one-shot to addPack on PackShop
+    └── seed-traits.ts    one-shot to addTrait on TraitShop
+```
+
+**Server features:**
+- WS auth: 30s timeout per connection; on `auth` message, validate via Privy or address; upsert into `players` table; bind `userId` → `connId` and disconnect any prior conn from the same user.
+- Heartbeat: server pings every 30s; on missed pong it terminates the dead socket.
+- Matchmaking: `find_match` immediately spawns an AI opponent (no PvP queue in v1). Player's deck is built from the `tokenIds[]` they sent — Stage 6 will plumb cache-then-chain ownership validation; v1 trusts the client's deck list and falls through to a deterministic creature template when off-chain creatures-cache misses.
+- Battle engine: server-authoritative. Both sides commit; engine resolves the turn; sends `turn_reveal` with mirrored "you" / "opponent" perspectives.
+- Pack-roll listener: on every `PackPurchased(buyer, packType, requestId)`, rolls N creatures (where N = `PACK_TYPE_TO_COUNT[packType]`) by picking a creature template uniformly + jittering each base stat by ±1, then calls `batchMintPack(buyer, [...creatures])` from the hot wallet. Retries up to 3 times with exponential backoff. Silently no-ops if `chain-config.json` is missing or `HOT_WALLET_PRIVATE_KEY` is unset.
+- HTTP `/health` endpoint returning `{ ok: true, connections: <n>, matches: <n> }` for Railway / Fly.io healthchecks.
+- Graceful shutdown on SIGINT / SIGTERM.
+
+### Damage formula (audit reference — must match `/server/src/battle-engine.ts`)
+
+Each turn both sides commit one of `ATK`, `DEF`, `CHG` plus optional `MomentumCommit` ∈ `ATK | DEF | TRK | null`.
+
+- Effective ATK = `teamStats.atk + (momentumCommit === "ATK" ? 2 : 0)`
+- Effective DEF = `teamStats.def + (momentumCommit === "DEF" ? 2 : 0)`
+
+Resolution:
+- **ATK vs DEF:** `damage = max(0, attackerATK − defenderDEF)`. If `defenderDEF > attackerATK`, defender heals `min(25, defenderDEF − attackerATK)`.
+- **ATK vs ATK:** both deal full ATK to the other.
+- **ATK vs CHG:** attacker deals full ATK to CHG side; CHG side gains +1 momentum.
+- **DEF vs DEF:** no damage, no momentum.
+- **DEF vs CHG:** CHG side gains +1 momentum.
+- **CHG vs CHG:** both gain +1 momentum, no damage.
+
+Momentum: committed momentum is **always consumed** (regardless of outcome). CHG turns gain +1; if the side's active trick is `Howl` (Wolf, id 2) or `Sprint` (Deer, id 9), CHG gains +2.
+
+**CHG counter bonus** (match-start, one-time): for each opponent creature whose dominant base stat (max of atk/def/chg/trk) is CHG, your team's `teamStats.atk` gets +1.
+
+**Trick effects** fire AFTER raw damage. Active trick = the highest-TRK creature on the team. Implementations live in `/server/src/creatures.ts`:
+- `Roar` / `Firebreath` / `Pounce` / `Deathroll` / `Frenzy` (lifesteal): on ATK hits, heal +1.
+- `Stomp` / `Maul` / `Charge` / `Wallow` / `Shell` (armor): on DEF receiving damage, reduce by 1.
+- `Trickster` / `Insight` (reflect): on DEF taking ATK, reflect 1 damage.
+- `Howl` / `Sprint`: charge bonus momentum (handled in engine, not the trick callback).
+
+Each side starts at 100 HP. Match ends when an HP bar hits 0 or after 30 turns (HP-comparison tie-break).
+
+### Message protocol — `packages/nextjs/types/battle.ts` ↔ `/server/src/types.ts`
+
+Both files MUST stay in sync. Discriminated union on `type`:
+
+| Direction | Type | Purpose |
+| --- | --- | --- |
+| client → server | `auth` (Privy `token` OR `address`) | Identify the connection. |
+| client → server | `find_match` (`deck: string[]`) | Queue against AI. |
+| client → server | `submit_action` (`action`, `momentumCommit?`, `actionId`) | Commit a turn. |
+| client → server | `leave_match` | Concede. |
+| client → server | `ping` (`ts: number`) | Liveness. |
+| server → client | `auth_ok` (`userId`) | Auth accepted. |
+| server → client | `auth_fail` (`reason`) | Auth rejected, server closes. |
+| server → client | `match_started` (`matchId`, `you`, `opponent`, `turnSeconds`) | New match. |
+| server → client | `turn_reveal` (`turn`, `you`, `opponent`) | Resolved turn — both action choices + damage + new HP/momentum. |
+| server → client | `match_ended` (`winner`, `summary`) | Final result. |
+| server → client | `pong` (`ts`) | Heartbeat reply. |
+| server → client | `error` (`message`, `code?`) | Non-fatal error. |
+
+### Deploy-time prerequisites the client must satisfy
+
+The `/server/README.md` enumerates these in detail. Tl;dr:
+
+1. Provision Postgres (Railway / Neon / Supabase / self-hosted).
+2. Generate or pick a server hot wallet — keep its balance low.
+3. After contracts deploy (Stage 5), **grant `MINTER_ROLE` on AnimalKingdomCard to the hot wallet**:
+   ```
+   cast send $CARD "grantRole(bytes32,address)" $(cast keccak "MINTER_ROLE") $HOT_WALLET --rpc-url $RPC --private-key $CLIENT_PK
+   ```
+4. (Optional, for Privy) create a Privy app at dashboard.privy.io; copy `PRIVY_APP_ID` + `PRIVY_APP_SECRET`.
+5. Fill `/server/.env` from `.env.example`. Create `/server/chain-config.json` with the deployed addresses (chainId 8453 + card + packShop + traitShop).
+6. Run migrations: `npx tsx src/db.ts --migrate-only`.
+7. Seed pack catalog (`npx tsx scripts/seed-pack-pool.ts`) — note the seed runs `addPack` which is `onlyOwner`, so set `HOT_WALLET_PRIVATE_KEY` temporarily to the deployer key for the seed run.
+8. Deploy on Railway / Fly.io per the README.
+9. Set `NEXT_PUBLIC_GAME_SERVER_WSS=wss://<your-server>` in the frontend `.env.local` and rebuild + redeploy the static frontend.
+
+### Files added — frontend
+
+| Path | Purpose |
+| --- | --- |
+| `packages/nextjs/types/battle.ts` | Shared message-protocol types (mirrors `/server/src/types.ts`). |
+
+### Files modified — frontend
+
+| Path | Change |
+| --- | --- |
+| `packages/nextjs/app/battle/page.tsx` | Replaced the Stage-4a stub with the full 5-state WS state machine + lobby + battle UI + match-end modal + reconnect-with-backoff. |
+
+### Files added — `/server/`
+
+All listed in the directory tree above. Highlights:
+- `/server/package.json`, `/server/tsconfig.json`, `/server/.env.example`, `/server/.gitignore`, `/server/README.md`
+- `/server/src/index.ts`, `battle-engine.ts`, `pack-roll.ts`, `creatures.ts`, `traits.ts`, `ai.ts`, `db.ts`, `auth.ts`, `chain.ts`, `logger.ts`, `types.ts`
+- `/server/migrations/001_init.sql`
+- `/server/scripts/seed-pack-pool.ts`, `seed-traits.ts`
+
+### Pass/fail vs Stage 4b spec
+
+- [x] 5-state WS machine (`NOT_CONFIGURED`, `CONNECTING`, `CONNECTED_IDLE`, `CONNECTED_IN_MATCH`, `RECONNECTING`, `DISCONNECTED`) implemented
+- [x] No `new WebSocket(...)` at module scope — wrapped in `useEffect` and gated on `gameServerWss`
+- [x] No `localStorage` at module scope — reads gated on `connectedAddress` inside an effect
+- [x] Auth on open: Privy token path AND address path; SIWE upgrade documented as Stage-7 work
+- [x] Match flow UI: lobby with deck dropdown, action commit + Momentum modal, turn timer, simultaneous reveal animation, HP bars, match-end summary, "Play again"
+- [x] Match log sidebar (collapsible on mobile via `hidden lg:block`)
+- [x] Battle types in `packages/nextjs/types/battle.ts` cover every protocol message
+- [x] `notification` from `~~/utils/scaffold-eth` used for connection / match toasts
+- [x] DaisyUI primitives for modals/buttons/badges
+- [x] `Address` component reservation noted (Privy / opponent identity is anonymized "AI Opponent" in v1)
+- [x] `useEffect` cleanup: unmount flag, all timers cleared, socket closed
+- [x] `/server/` directory shipped with package.json + tsconfig + README + .env.example + .gitignore + 11 source files + 1 migration + 2 seed scripts
+- [x] Server `tsc --noEmit` exits 0
+- [x] Frontend `yarn build` exits 0, static export to `packages/nextjs/out/`, 12 routes
+- [x] Frontend `.env.example` already documents `NEXT_PUBLIC_GAME_SERVER_WSS` (Stage 4a) — verified
+- [x] Committed and pushed as `clawdbotatg`
+
+### Non-blocking warnings (carried over from Stage 4a)
+
+- `@farcaster/mini-app-solana` "Module not found" warning emitted by Privy SDK. Pre-existing from Stage 4a; doesn't affect the build.
+- npm warning: `@privy-io/server-auth` is deprecated in favor of `@privy-io/node`. v1 still uses the legacy package because it's the install Privy still documents publicly; Stage 7 should consider migrating.
+
+### What Stage 5 (contract audit) should pick up
+
+- The on-chain surface is unchanged from Stage 2. Audit `packages/foundry/contracts/*.sol` per the original Stage 2 → Stage 5 hand-off.
+- The new `/server/` source is **out of scope** for the contract audit (it's off-chain). Stage 7's frontend QA will not touch it either — it's the client's responsibility to operate.
+- The damage formula in `/server/src/battle-engine.ts` is a fairness-relevant component but lives off-chain by design. Document any concerns as game-balance notes; do not block on them.
+
+---
+
 # 📋 PICK-UP-AND-CONTINUE GUIDE FOR THE NEXT AI SESSION
 
 **Read this section first if you're a new Claude Code session inheriting this build.**
@@ -431,7 +619,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `create_repo` (Stage 1) | ✅ done | `0xdcb54d09c7564692fe158ae309e9fba63083718a298e84651cef586bb6312730` |
 | `create_plan` (Stage 2 contracts compile) | ✅ done | `0xa3a60b30730f3efd7073e1ca5b6632bf1a04e457bcee5ed1018ff11519b878ef` |
 | `create_user_journey` (Stage 3 USERJOURNEY.md) | ✅ done | (logged by orchestrator after Stage 3 returned) |
-| `prototype` (frontend MVP) | 🟡 PARTIAL — Stage 4a done (providers + 6 pages + branding); Stage 4b pending (battle screen + WS server) |  |
+| `prototype` (frontend MVP) | ✅ done — Stage 4a (providers + 6 pages + branding) AND Stage 4b (battle screen + /server/ scaffolding) |  |
 | `contract_audit` |  |  |
 | `contract_fix` |  |  |
 | `frontend_audit` |  |  |
@@ -762,5 +950,5 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Opus subagent after Stage 4a (`prototype` — frontend MVP non-battle) completed. Edit this date when you append a new section.
+2026-04-28 by Opus subagent after Stage 4b (`prototype` — battle screen WS state machine + `/server/` scaffolding) completed. Edit this date when you append a new section.
 

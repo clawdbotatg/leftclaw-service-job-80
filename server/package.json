@@ -1,0 +1,37 @@
+{
+  "name": "animal-kingdom-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebSocket battle server + on-chain pack-roll listener for Animal Kingdom TCG (LeftClaw Job #80).",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx src/db.ts --migrate-only",
+    "seed:packs": "tsx scripts/seed-pack-pool.ts",
+    "seed:traits": "tsx scripts/seed-traits.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@privy-io/server-auth": "^1.18.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "viem": "^2.21.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "@types/pg": "^8.11.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
