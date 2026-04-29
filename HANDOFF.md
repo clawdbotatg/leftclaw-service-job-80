@@ -620,8 +620,8 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `create_plan` (Stage 2 contracts compile) | ✅ done | `0xa3a60b30730f3efd7073e1ca5b6632bf1a04e457bcee5ed1018ff11519b878ef` |
 | `create_user_journey` (Stage 3 USERJOURNEY.md) | ✅ done | (logged by orchestrator after Stage 3 returned) |
 | `prototype` (frontend MVP) | ✅ done — Stage 4a (providers + 6 pages + branding) AND Stage 4b (battle screen + /server/ scaffolding) |  |
-| `contract_audit` |  |  |
-| `contract_fix` |  |  |
+| `contract_audit` | ✅ done — 6 issues filed (1 High, 5 Medium, 6 Info) |  |
+| `contract_fix` | ✅ done — all High + Medium closed |  |
 | `frontend_audit` |  |  |
 | `frontend_fix` |  |  |
 | `full_audit` / `full_audit_fix` |  |  |
@@ -1069,3 +1069,74 @@ No code, no contracts, no tests modified — Stage 5 is read-only. The audit-onl
 - [ ] (Note) `audit/AUDIT-REPORT.md` and `audit/findings-*.md` deliverables NOT written — the orchestrator harness blocked the Write tool on findings markdown files. The full audit content lives in this section and in the GitHub issue bodies; consider this Stage 5's canonical record.
 
 
+
+
+---
+
+## Stage 6 — Contract Fixes
+
+**Status:** PASS
+
+**`forge build`:** exit 0 (only pre-existing scaffold warnings)
+**`forge test`:** 47/47 passing (was 16) — added 22 new test cases covering every fix
+**`yarn build` (frontend):** exit 0, 12 routes prerendered, static export to `packages/nextjs/out/`
+
+### Per-issue resolution
+
+| # | Severity | Issue | Resolution | Commit |
+| --- | --- | --- | --- | --- |
+| 1 | High | `setDefaultRoyalty` no upper bound | Added `MAX_ROYALTY_BPS = 1000` (10% — blue-chip norm) constant + `RoyaltyTooHigh` custom error. Reverts on `feeBps > MAX_ROYALTY_BPS`. | `ffbf9c8` |
+| 2 | Medium | TraitShop `setCard` rug | Made `card` `immutable`. Removed `setCard` entirely. Migration requires fresh TraitShop deploy (~$5 on Base). | `ffbf9c8` |
+| 3 | Medium | `setRevenueWallet` no timelock | Replaced single-step `setRevenueWallet` with `proposeRevenueWallet` + `acceptRevenueWallet` separated by `REVENUE_WALLET_TIMELOCK = 24 hours`. Added `cancelRevenueWalletProposal` for mistake recovery. Applied identically to PackShop and TraitShop. | `ffbf9c8` |
+| 4 | Medium | Sole-admin DEFAULT_ADMIN_ROLE brick | Switched AnimalKingdomCard from plain `AccessControl + Ownable2Step` to OZ's `AccessControlDefaultAdminRules`. ADAR provides `owner()` via IERC5313 (so marketplaces still see a single collection owner) AND a 3-day two-step transfer for DEFAULT_ADMIN_ROLE. Direct `revokeRole`/`renounceRole` on DEFAULT_ADMIN_ROLE now reverts; bricking-via-renounce requires the same delay flow. `onlyOwner` admin setters changed to `onlyRole(DEFAULT_ADMIN_ROLE)`. | `ffbf9c8` |
+| 5 | Medium | Refund DoS on contract wallets | Replaced `msg.value < priceWei` with `msg.value != priceWei` (exact payment) on PackShop.buyPack and TraitShop.buyTrait. Dropped the refund branch entirely. New error: `IncorrectPayment(sent, required)`. Eliminates the contract-wallet/Privy/4337 fallback DoS surface. | `ffbf9c8` |
+| 6 | Medium | `addPack` frontrun extracts overpay buffer | Added `expectedPriceWei` to `buyPack` and `expectedPriceUsdc` to `buyPackUSDC` (Uniswap-style slippage guard). Reverts with `PriceChanged(onchain, expected)` on mismatch. Combined with #5 (exact payment) this fully closes the frontrun surface. Frontend `pack/page.tsx` updated to pass the pinned price as the second arg. | `ffbf9c8` |
+
+### Info findings — won't fix
+
+The 6 Info findings from Stage 5 are intentionally left as-is per the per-stage prompt. None of them affect security or correctness: they are style notes (`mixed-case-function` on `buyPackUSDC`, `asm-keccak256` on requestId hash, etc.) or low-impact gas tips. Deferred.
+
+### Files changed
+
+| Path | Change |
+| --- | --- |
+| `packages/foundry/contracts/AnimalKingdomCard.sol` | Switched inheritance to `AccessControlDefaultAdminRules`, dropped `Ownable2Step`. Added royalty cap. `onlyOwner` → `onlyRole(DEFAULT_ADMIN_ROLE)` on three admin setters. |
+| `packages/foundry/contracts/PackShop.sol` | `buyPack` / `buyPackUSDC` now take `expectedPrice*` arg + require exact payment. Replaced `setRevenueWallet` with timelocked propose/accept/cancel. New errors: `IncorrectPayment`, `PriceChanged`, `NoPendingRevenueWallet`, `TimelockNotElapsed`. Removed `RefundFailed`. |
+| `packages/foundry/contracts/TraitShop.sol` | `card` is `immutable`; `setCard` removed. `buyTrait` now requires exact payment. Replaced `setRevenueWallet` with timelocked propose/accept/cancel. New errors mirror PackShop. Removed `RefundFailed` and `CardUpdated` event. |
+| `packages/foundry/test/Test_AnimalKingdomCard.t.sol` | Added 6 new tests: royalty at-cap, above-cap revert, 50%-typo revert; revoke-DEFAULT_ADMIN-direct revert; renounce-without-schedule revert; default-admin-transfer respects 3-day delay. Existing test `test_NonOwnerCannotSetImageBaseURI` updated to expect AccessControl-shaped revert (was Ownable). |
+| `packages/foundry/test/Test_PackShop.t.sol` | NEW — 14 tests covering exact/over/under payment, expectedPrice mismatch on both buyPack and buyPackUSDC, the explicit upward-frontrun scenario, full revenue-wallet timelock flow (propose/accept/cancel/early-revert), and `PackInactive` regression. |
+| `packages/foundry/test/Test_TraitShop.t.sol` | NEW — 11 tests covering immutable-card invariant (selector-absence test), exact/over/under payment, ownership and availability gating, full revenue-wallet timelock flow. |
+| `packages/nextjs/contracts/deployedContracts.ts` | Regenerated from `forge build` artifacts. ABIs now reflect the new contract surface (expectedPrice args on buyPack/buyPackUSDC, AccessControlDefaultAdminRules on AnimalKingdomCard, propose/accept/cancel revenue-wallet on both shops). Addresses still placeholder zero (Stage 5 deploy will fill in the real ones). |
+| `packages/nextjs/app/pack/page.tsx` | `handleBuyEth` and `handleBuyUsdc` now pass `pack.priceWei` / `pack.priceUsdc` as the new `expectedPrice*` second argument. One-line change per call site. |
+
+### Why these specific fix choices
+
+- **#1 Royalty cap at 10%.** Matches blue-chip NFT collection norms (BAYC, Azuki, etc.). Anything above is an obvious typo class.
+- **#2 Immutable over timelock.** TraitShop is small and cheap to redeploy; the migration use case is rare. Removing the migration path entirely eliminates a whole class of admin-rug attack surface (point-card-at-malicious-contract). Stage 5 deploy script will need to grant TRAIT_FUSER_ROLE on the AnimalKingdomCard to whatever TraitShop address ends up deployed — that's a documented setup step and was already in the HANDOFF.
+- **#3 24-hour timelock chosen over revoke-and-redeploy.** A 24-hour delay is short enough not to cripple legitimate operational rotations and long enough that a compromised key holder cannot drain in-flight purchases before the team responds. The propose/accept/cancel pattern matches OZ's `Ownable2Step` shape that the rest of the contract already uses.
+- **#4 AccessControlDefaultAdminRules over the simpler "track adminCount" defensive fix.** ADAR is OZ-blessed, audit-friendly, and provides the additional benefit of a 3-day two-step admin transfer (matches the timelock theme already in use for revenueWallet rotation). Dropping `Ownable2Step` consolidates ownership semantics under one mechanism: `defaultAdmin()` IS `owner()` by construction (via IERC5313). No more "ownership is one thing, role admin is another" confusion. Marketplaces (OpenSea, etc.) read `owner()` for collection ownership — ADAR's IERC5313 implementation keeps that working.
+- **#5 Exact payment over deferred-refund pattern.** The frontend already knows the exact price (it reads `getPack(packType)` to render the UI), so passing it in is free. Eliminates the refund-revert DoS surface AND simplifies the contract state (no `pendingRefunds` mapping, no `claimRefund` function, no audit surface around either). The only downside is users who manually craft transactions need to send the exact value — acceptable trade.
+- **#6 Slippage guard, not "freeze the price".** Locking the price is a worse UX (legitimate price updates would always require redeploy or a delay). The Uniswap-style `expectedPrice*` arg is a low-friction frontend-to-onchain price-pinning mechanism; if the price has moved, the tx reverts cleanly with `PriceChanged` and the frontend can re-fetch and prompt the user.
+
+### Pass/fail vs Stage 6 spec
+
+- [x] Issue #1 (High) closed
+- [x] Issue #2 (Medium) closed
+- [x] Issue #3 (Medium) closed
+- [x] Issue #4 (Medium) closed
+- [x] Issue #5 (Medium) closed
+- [x] Issue #6 (Medium) closed
+- [x] `forge build` exits 0
+- [x] `forge test` 47/47 passing (added 22 new tests for the fixes)
+- [x] Frontend ABIs regenerated from new build artifacts
+- [x] Frontend `pack/page.tsx` updated for new `expectedPrice*` args
+- [x] `yarn build` exits 0, 12 routes prerendered
+- [x] HANDOFF.md updated (this section)
+- [x] Stage table updated
+- [x] No deploy, no IPFS upload — stop conditions respected
+
+### What Stage 7 (frontend QA audit) should pick up
+
+- The on-chain surface has changed: `buyPack(uint8, uint256)`, `buyPackUSDC(uint8, uint256)`, `setRevenueWallet` is gone (use propose/accept), `setCard` is gone, AnimalKingdomCard has `beginDefaultAdminTransfer` / `acceptDefaultAdminTransfer` instead of `transferOwnership` / `acceptOwnership`. The placeholder ABI in `deployedContracts.ts` already reflects this.
+- Stage 5 (deploy + verify) still has not run. Frontend has placeholder zero addresses. Stage 7 audit can read source against the QA checklist; runtime trace verification of Approve→Buy spender chain stays valid because `buyPackUSDC` still uses `safeTransferFrom(buyer, revenueWallet, amount)` — same shape as before.
+- Frontend QA must verify the ABI in `deployedContracts.ts` (not `externalContracts.ts`) covers all error types in the call chain. The new errors (`IncorrectPayment`, `PriceChanged`, `NoPendingRevenueWallet`, `TimelockNotElapsed`, `RoyaltyTooHigh`, `AccessControlEnforcedDefaultAdminRules`, `AccessControlEnforcedDefaultAdminDelay`, `AccessControlInvalidDefaultAdmin`, etc.) need to decode through `getParsedError` for clean UX. Most are admin-only and won't trigger from end-user flows, but `IncorrectPayment` and `PriceChanged` definitely can.

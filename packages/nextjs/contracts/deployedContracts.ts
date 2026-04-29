@@ -1,6 +1,8 @@
 /**
  * Stage 4a placeholder — Stage 5 (deploy) will regenerate this file with the real
- * Base mainnet addresses. ABIs come straight from `forge build` output.
+ * Base mainnet addresses. ABIs come straight from `forge build` output (regenerated
+ * after Stage 6 contract audit fixes — kept in sync with the new contract surface
+ * incl. expectedPrice args, exact-payment, and AccessControlDefaultAdminRules).
  *
  * Addresses are zero-address placeholders. `useScaffoldReadContract` /
  * `useScaffoldWriteContract` will fail gracefully in this state — pages should
@@ -26,6 +28,19 @@ const deployedContracts = {
         },
         {
           type: "function",
+          name: "ADMIN_TRANSFER_DELAY",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint48",
+              internalType: "uint48",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
           name: "DEFAULT_ADMIN_ROLE",
           inputs: [],
           outputs: [
@@ -46,6 +61,19 @@ const deployedContracts = {
               name: "",
               type: "uint256",
               internalType: "uint256",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
+          name: "MAX_ROYALTY_BPS",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint96",
+              internalType: "uint96",
             },
           ],
           stateMutability: "view",
@@ -91,7 +119,7 @@ const deployedContracts = {
         },
         {
           type: "function",
-          name: "acceptOwnership",
+          name: "acceptDefaultAdminTransfer",
           inputs: [],
           outputs: [],
           stateMutability: "nonpayable",
@@ -183,6 +211,78 @@ const deployedContracts = {
             },
           ],
           stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "beginDefaultAdminTransfer",
+          inputs: [
+            {
+              name: "newAdmin",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "cancelDefaultAdminTransfer",
+          inputs: [],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "changeDefaultAdminDelay",
+          inputs: [
+            {
+              name: "newDelay",
+              type: "uint48",
+              internalType: "uint48",
+            },
+          ],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "defaultAdmin",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
+          name: "defaultAdminDelay",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint48",
+              internalType: "uint48",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
+          name: "defaultAdminDelayIncreaseWait",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint48",
+              internalType: "uint48",
+            },
+          ],
+          stateMutability: "view",
         },
         {
           type: "function",
@@ -436,23 +536,39 @@ const deployedContracts = {
         },
         {
           type: "function",
-          name: "pendingOwner",
+          name: "pendingDefaultAdmin",
           inputs: [],
           outputs: [
             {
-              name: "",
+              name: "newAdmin",
               type: "address",
               internalType: "address",
+            },
+            {
+              name: "schedule",
+              type: "uint48",
+              internalType: "uint48",
             },
           ],
           stateMutability: "view",
         },
         {
           type: "function",
-          name: "renounceOwnership",
+          name: "pendingDefaultAdminDelay",
           inputs: [],
-          outputs: [],
-          stateMutability: "nonpayable",
+          outputs: [
+            {
+              name: "newDelay",
+              type: "uint48",
+              internalType: "uint48",
+            },
+            {
+              name: "schedule",
+              type: "uint48",
+              internalType: "uint48",
+            },
+          ],
+          stateMutability: "view",
         },
         {
           type: "function",
@@ -464,7 +580,7 @@ const deployedContracts = {
               internalType: "bytes32",
             },
             {
-              name: "callerConfirmation",
+              name: "account",
               type: "address",
               internalType: "address",
             },
@@ -487,6 +603,13 @@ const deployedContracts = {
               internalType: "address",
             },
           ],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "rollbackDefaultAdminDelay",
+          inputs: [],
           outputs: [],
           stateMutability: "nonpayable",
         },
@@ -832,19 +955,6 @@ const deployedContracts = {
           stateMutability: "nonpayable",
         },
         {
-          type: "function",
-          name: "transferOwnership",
-          inputs: [
-            {
-              name: "newOwner",
-              type: "address",
-              internalType: "address",
-            },
-          ],
-          outputs: [],
-          stateMutability: "nonpayable",
-        },
-        {
           type: "event",
           name: "Approval",
           inputs: [
@@ -945,6 +1055,56 @@ const deployedContracts = {
         },
         {
           type: "event",
+          name: "DefaultAdminDelayChangeCanceled",
+          inputs: [],
+          anonymous: false,
+        },
+        {
+          type: "event",
+          name: "DefaultAdminDelayChangeScheduled",
+          inputs: [
+            {
+              name: "newDelay",
+              type: "uint48",
+              indexed: false,
+              internalType: "uint48",
+            },
+            {
+              name: "effectSchedule",
+              type: "uint48",
+              indexed: false,
+              internalType: "uint48",
+            },
+          ],
+          anonymous: false,
+        },
+        {
+          type: "event",
+          name: "DefaultAdminTransferCanceled",
+          inputs: [],
+          anonymous: false,
+        },
+        {
+          type: "event",
+          name: "DefaultAdminTransferScheduled",
+          inputs: [
+            {
+              name: "newAdmin",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "acceptSchedule",
+              type: "uint48",
+              indexed: false,
+              internalType: "uint48",
+            },
+          ],
+          anonymous: false,
+        },
+        {
+          type: "event",
           name: "DefaultRoyaltyUpdated",
           inputs: [
             {
@@ -971,44 +1131,6 @@ const deployedContracts = {
               type: "string",
               indexed: false,
               internalType: "string",
-            },
-          ],
-          anonymous: false,
-        },
-        {
-          type: "event",
-          name: "OwnershipTransferStarted",
-          inputs: [
-            {
-              name: "previousOwner",
-              type: "address",
-              indexed: true,
-              internalType: "address",
-            },
-            {
-              name: "newOwner",
-              type: "address",
-              indexed: true,
-              internalType: "address",
-            },
-          ],
-          anonymous: false,
-        },
-        {
-          type: "event",
-          name: "OwnershipTransferred",
-          inputs: [
-            {
-              name: "previousOwner",
-              type: "address",
-              indexed: true,
-              internalType: "address",
-            },
-            {
-              name: "newOwner",
-              type: "address",
-              indexed: true,
-              internalType: "address",
             },
           ],
           anonymous: false,
@@ -1155,6 +1277,33 @@ const deployedContracts = {
           type: "error",
           name: "AccessControlBadConfirmation",
           inputs: [],
+        },
+        {
+          type: "error",
+          name: "AccessControlEnforcedDefaultAdminDelay",
+          inputs: [
+            {
+              name: "schedule",
+              type: "uint48",
+              internalType: "uint48",
+            },
+          ],
+        },
+        {
+          type: "error",
+          name: "AccessControlEnforcedDefaultAdminRules",
+          inputs: [],
+        },
+        {
+          type: "error",
+          name: "AccessControlInvalidDefaultAdmin",
+          inputs: [
+            {
+              name: "defaultAdmin",
+              type: "address",
+              internalType: "address",
+            },
+          ],
         },
         {
           type: "error",
@@ -1373,28 +1522,6 @@ const deployedContracts = {
         },
         {
           type: "error",
-          name: "OwnableInvalidOwner",
-          inputs: [
-            {
-              name: "owner",
-              type: "address",
-              internalType: "address",
-            },
-          ],
-        },
-        {
-          type: "error",
-          name: "OwnableUnauthorizedAccount",
-          inputs: [
-            {
-              name: "account",
-              type: "address",
-              internalType: "address",
-            },
-          ],
-        },
-        {
-          type: "error",
           name: "PackSizeTooLarge",
           inputs: [
             {
@@ -1413,6 +1540,38 @@ const deployedContracts = {
           type: "error",
           name: "PackSizeZero",
           inputs: [],
+        },
+        {
+          type: "error",
+          name: "RoyaltyTooHigh",
+          inputs: [
+            {
+              name: "supplied",
+              type: "uint96",
+              internalType: "uint96",
+            },
+            {
+              name: "max",
+              type: "uint96",
+              internalType: "uint96",
+            },
+          ],
+        },
+        {
+          type: "error",
+          name: "SafeCastOverflowedUintDowncast",
+          inputs: [
+            {
+              name: "bits",
+              type: "uint8",
+              internalType: "uint8",
+            },
+            {
+              name: "value",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
         },
         {
           type: "error",
@@ -1436,6 +1595,7 @@ const deployedContracts = {
           inputs: [],
         },
       ],
+      inheritedFunctions: {},
     },
     PackShop: {
       address: "0x0000000000000000000000000000000000000000",
@@ -1458,7 +1618,27 @@ const deployedContracts = {
         },
         {
           type: "function",
+          name: "REVENUE_WALLET_TIMELOCK",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
           name: "acceptOwnership",
+          inputs: [],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "acceptRevenueWallet",
           inputs: [],
           outputs: [],
           stateMutability: "nonpayable",
@@ -1500,6 +1680,11 @@ const deployedContracts = {
               type: "uint8",
               internalType: "uint8",
             },
+            {
+              name: "expectedPriceWei",
+              type: "uint256",
+              internalType: "uint256",
+            },
           ],
           outputs: [],
           stateMutability: "payable",
@@ -1512,6 +1697,11 @@ const deployedContracts = {
               name: "packType",
               type: "uint8",
               internalType: "uint8",
+            },
+            {
+              name: "expectedPriceUsdc",
+              type: "uint256",
+              internalType: "uint256",
             },
           ],
           outputs: [],
@@ -1535,6 +1725,13 @@ const deployedContracts = {
             },
           ],
           stateMutability: "view",
+        },
+        {
+          type: "function",
+          name: "cancelRevenueWalletProposal",
+          inputs: [],
+          outputs: [],
+          stateMutability: "nonpayable",
         },
         {
           type: "function",
@@ -1639,6 +1836,32 @@ const deployedContracts = {
         },
         {
           type: "function",
+          name: "pendingRevenueWallet",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
+          name: "proposeRevenueWallet",
+          inputs: [
+            {
+              name: "newWallet",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
           name: "renounceOwnership",
           inputs: [],
           outputs: [],
@@ -1659,6 +1882,19 @@ const deployedContracts = {
         },
         {
           type: "function",
+          name: "revenueWalletEffectiveAt",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
           name: "setPackActive",
           inputs: [
             {
@@ -1670,19 +1906,6 @@ const deployedContracts = {
               name: "active",
               type: "bool",
               internalType: "bool",
-            },
-          ],
-          outputs: [],
-          stateMutability: "nonpayable",
-        },
-        {
-          type: "function",
-          name: "setRevenueWallet",
-          inputs: [
-            {
-              name: "newWallet",
-              type: "address",
-              internalType: "address",
             },
           ],
           outputs: [],
@@ -1874,6 +2097,38 @@ const deployedContracts = {
         },
         {
           type: "event",
+          name: "RevenueWalletProposalCancelled",
+          inputs: [
+            {
+              name: "cancelled",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+          ],
+          anonymous: false,
+        },
+        {
+          type: "event",
+          name: "RevenueWalletProposed",
+          inputs: [
+            {
+              name: "proposed",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "effectiveAt",
+              type: "uint256",
+              indexed: false,
+              internalType: "uint256",
+            },
+          ],
+          anonymous: false,
+        },
+        {
+          type: "event",
           name: "RevenueWalletUpdated",
           inputs: [
             {
@@ -1934,7 +2189,7 @@ const deployedContracts = {
         },
         {
           type: "error",
-          name: "InsufficientPayment",
+          name: "IncorrectPayment",
           inputs: [
             {
               name: "sent",
@@ -1947,6 +2202,11 @@ const deployedContracts = {
               internalType: "uint256",
             },
           ],
+        },
+        {
+          type: "error",
+          name: "NoPendingRevenueWallet",
+          inputs: [],
         },
         {
           type: "error",
@@ -1983,12 +2243,23 @@ const deployedContracts = {
         },
         {
           type: "error",
-          name: "ReentrancyGuardReentrantCall",
-          inputs: [],
+          name: "PriceChanged",
+          inputs: [
+            {
+              name: "onchain",
+              type: "uint256",
+              internalType: "uint256",
+            },
+            {
+              name: "expected",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
         },
         {
           type: "error",
-          name: "RefundFailed",
+          name: "ReentrancyGuardReentrantCall",
           inputs: [],
         },
         {
@@ -2009,6 +2280,22 @@ const deployedContracts = {
         },
         {
           type: "error",
+          name: "TimelockNotElapsed",
+          inputs: [
+            {
+              name: "currentTime",
+              type: "uint256",
+              internalType: "uint256",
+            },
+            {
+              name: "effectiveAt",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+        },
+        {
+          type: "error",
           name: "UsdcPurchaseDisabled",
           inputs: [
             {
@@ -2024,6 +2311,7 @@ const deployedContracts = {
           inputs: [],
         },
       ],
+      inheritedFunctions: {},
     },
     TraitShop: {
       address: "0x0000000000000000000000000000000000000000",
@@ -2046,7 +2334,27 @@ const deployedContracts = {
         },
         {
           type: "function",
+          name: "REVENUE_WALLET_TIMELOCK",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
           name: "acceptOwnership",
+          inputs: [],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
+          name: "acceptRevenueWallet",
           inputs: [],
           outputs: [],
           stateMutability: "nonpayable",
@@ -2091,6 +2399,13 @@ const deployedContracts = {
           ],
           outputs: [],
           stateMutability: "payable",
+        },
+        {
+          type: "function",
+          name: "cancelRevenueWalletProposal",
+          inputs: [],
+          outputs: [],
+          stateMutability: "nonpayable",
         },
         {
           type: "function",
@@ -2169,6 +2484,32 @@ const deployedContracts = {
         },
         {
           type: "function",
+          name: "pendingRevenueWallet",
+          inputs: [],
+          outputs: [
+            {
+              name: "",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          stateMutability: "view",
+        },
+        {
+          type: "function",
+          name: "proposeRevenueWallet",
+          inputs: [
+            {
+              name: "newWallet",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          outputs: [],
+          stateMutability: "nonpayable",
+        },
+        {
+          type: "function",
           name: "renounceOwnership",
           inputs: [],
           outputs: [],
@@ -2189,29 +2530,16 @@ const deployedContracts = {
         },
         {
           type: "function",
-          name: "setCard",
-          inputs: [
+          name: "revenueWalletEffectiveAt",
+          inputs: [],
+          outputs: [
             {
-              name: "newCard",
-              type: "address",
-              internalType: "address",
+              name: "",
+              type: "uint256",
+              internalType: "uint256",
             },
           ],
-          outputs: [],
-          stateMutability: "nonpayable",
-        },
-        {
-          type: "function",
-          name: "setRevenueWallet",
-          inputs: [
-            {
-              name: "newWallet",
-              type: "address",
-              internalType: "address",
-            },
-          ],
-          outputs: [],
-          stateMutability: "nonpayable",
+          stateMutability: "view",
         },
         {
           type: "function",
@@ -2295,25 +2623,6 @@ const deployedContracts = {
         },
         {
           type: "event",
-          name: "CardUpdated",
-          inputs: [
-            {
-              name: "previous",
-              type: "address",
-              indexed: true,
-              internalType: "address",
-            },
-            {
-              name: "current",
-              type: "address",
-              indexed: true,
-              internalType: "address",
-            },
-          ],
-          anonymous: false,
-        },
-        {
-          type: "event",
           name: "EthSwept",
           inputs: [
             {
@@ -2365,6 +2674,38 @@ const deployedContracts = {
               type: "address",
               indexed: true,
               internalType: "address",
+            },
+          ],
+          anonymous: false,
+        },
+        {
+          type: "event",
+          name: "RevenueWalletProposalCancelled",
+          inputs: [
+            {
+              name: "cancelled",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+          ],
+          anonymous: false,
+        },
+        {
+          type: "event",
+          name: "RevenueWalletProposed",
+          inputs: [
+            {
+              name: "proposed",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "effectiveAt",
+              type: "uint256",
+              indexed: false,
+              internalType: "uint256",
             },
           ],
           anonymous: false,
@@ -2495,7 +2836,7 @@ const deployedContracts = {
         },
         {
           type: "error",
-          name: "InsufficientPayment",
+          name: "IncorrectPayment",
           inputs: [
             {
               name: "sent",
@@ -2508,6 +2849,11 @@ const deployedContracts = {
               internalType: "uint256",
             },
           ],
+        },
+        {
+          type: "error",
+          name: "NoPendingRevenueWallet",
+          inputs: [],
         },
         {
           type: "error",
@@ -2554,11 +2900,6 @@ const deployedContracts = {
         },
         {
           type: "error",
-          name: "RefundFailed",
-          inputs: [],
-        },
-        {
-          type: "error",
           name: "SafeERC20FailedOperation",
           inputs: [
             {
@@ -2572,6 +2913,22 @@ const deployedContracts = {
           type: "error",
           name: "SweepFailed",
           inputs: [],
+        },
+        {
+          type: "error",
+          name: "TimelockNotElapsed",
+          inputs: [
+            {
+              name: "currentTime",
+              type: "uint256",
+              internalType: "uint256",
+            },
+            {
+              name: "effectiveAt",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
         },
         {
           type: "error",
@@ -2590,6 +2947,7 @@ const deployedContracts = {
           inputs: [],
         },
       ],
+      inheritedFunctions: {},
     },
   },
 } as const;

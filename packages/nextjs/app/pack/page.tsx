@@ -230,10 +230,12 @@ const PackCard = ({
   const handleBuyEth = async () => {
     if (!buyer) return notification.warning("Connect your wallet first.");
     try {
+      // expectedPriceWei pins the price the user saw — slippage guard against owner
+      // price changes between read and execute (Stage 6 audit fix #6).
       const hash = await writeAndOpen(() =>
         writePack({
           functionName: "buyPack",
-          args: [pack.packType],
+          args: [pack.packType, pack.priceWei],
           value: pack.priceWei,
         }),
       );
@@ -263,10 +265,12 @@ const PackCard = ({
   const handleBuyUsdc = async () => {
     if (!buyer) return notification.warning("Connect your wallet first.");
     try {
+      // expectedPriceUsdc pins the price the user saw — slippage guard against owner
+      // price changes between read and execute (Stage 6 audit fix #6).
       const hash = await writeAndOpen(() =>
         writeUsdcPack({
           functionName: "buyPackUSDC",
-          args: [pack.packType],
+          args: [pack.packType, pack.priceUsdc],
         }),
       );
       if (hash) persistPending(hash);
