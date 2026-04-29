@@ -622,7 +622,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `prototype` (frontend MVP) | ✅ done — Stage 4a (providers + 6 pages + branding) AND Stage 4b (battle screen + /server/ scaffolding) |  |
 | `contract_audit` | ✅ done — 6 issues filed (1 High, 5 Medium, 6 Info) |  |
 | `contract_fix` | ✅ done — all High + Medium closed |  |
-| `frontend_audit` |  |  |
+| `frontend_audit` | ✅ done — 2 ship-blockers + 6 should-fix issues filed |  |
 | `frontend_fix` |  |  |
 | `full_audit` / `full_audit_fix` |  |  |
 | `deploy_contract` |  |  |
@@ -950,7 +950,7 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Opus subagent after Stage 5 (`contract_audit`) completed. Edit this date when you append a new section.
+2026-04-28 by Opus subagent after Stage 7 (`frontend_audit`) completed. Edit this date when you append a new section.
 
 ---
 
@@ -1140,3 +1140,176 @@ The 6 Info findings from Stage 5 are intentionally left as-is per the per-stage 
 - The on-chain surface has changed: `buyPack(uint8, uint256)`, `buyPackUSDC(uint8, uint256)`, `setRevenueWallet` is gone (use propose/accept), `setCard` is gone, AnimalKingdomCard has `beginDefaultAdminTransfer` / `acceptDefaultAdminTransfer` instead of `transferOwnership` / `acceptOwnership`. The placeholder ABI in `deployedContracts.ts` already reflects this.
 - Stage 5 (deploy + verify) still has not run. Frontend has placeholder zero addresses. Stage 7 audit can read source against the QA checklist; runtime trace verification of Approve→Buy spender chain stays valid because `buyPackUSDC` still uses `safeTransferFrom(buyer, revenueWallet, amount)` — same shape as before.
 - Frontend QA must verify the ABI in `deployedContracts.ts` (not `externalContracts.ts`) covers all error types in the call chain. The new errors (`IncorrectPayment`, `PriceChanged`, `NoPendingRevenueWallet`, `TimelockNotElapsed`, `RoyaltyTooHigh`, `AccessControlEnforcedDefaultAdminRules`, `AccessControlEnforcedDefaultAdminDelay`, `AccessControlInvalidDefaultAdmin`, etc.) need to decode through `getParsedError` for clean UX. Most are admin-only and won't trigger from end-user flows, but `IncorrectPayment` and `PriceChanged` definitely can.
+
+---
+
+## Stage 7 — Frontend Audit
+
+**Status:** PASS (audit-only, no source modified) — 2 ship-blocker FAIL items + 6 should-fix items filed as issues
+
+**Methodology:** Traced every write flow end-to-end against the QA SKILL (https://ethskills.com/qa/SKILL.md), the frontend-ux SKILL, and the frontend-playbook SKILL. Did NOT pattern-match — resolved every variable to its actual value in source. For each external contract call, enumerated every error it can throw and verified ABI coverage against `deployedContracts.ts` and `externalContracts.ts`.
+
+### Trace 1 — Pack with ETH
+
+`/pack` page → `PackCard::handleBuyEth`:
+1. User clicks "Buy with ETH" → `writeAndOpen(() => writePack({ functionName: "buyPack", args: [pack.packType, pack.priceWei], value: pack.priceWei }))`.
+2. `useScaffoldWriteContract` → `useTransactor` → wagmi `writeContractAsync`.
+3. `pack.priceWei` is read from `getPack(packType)` via `useReadContracts` (line 49-62) — the same value the user sees in the UI. `expectedPriceWei` matches `value` exactly: both are `pack.priceWei`. Race window: between read and execute, owner could call `addPack` to change price. Contract reverts with `PriceChanged(onchain, expected)` — `PriceChanged` IS in PackShop ABI (line 2245-2261 of `deployedContracts.ts`).
+4. `IncorrectPayment` (msg.value mismatch) — IS in ABI.
+5. `PackInactive` — IS in ABI.
+6. `EthPurchaseDisabled` — IS in ABI.
+7. `EthForwardFailed` — IS in ABI.
+8. `getParsedErrorWithAllAbis` falls back across ALL chain contracts, so any error decodes.
+
+**Trace verdict:** PASS — all errors covered.
+
+### Trace 2 — Pack with USDC (the critical approve flow)
+
+`/pack` page → `PackCard::handleApprove` then `handleBuyUsdc`:
+
+1. **Approve step.** `writeUsdcApprove({ functionName: "approve", args: [packShopAddress, pack.priceUsdc] })`.
+   - `packShopAddress` resolves to `useDeployedContractInfo({ contractName: "PackShop" }).data.address` — placeholder `0x0000…0000` until Stage 5 deploy.
+   - The `spender` argument to USDC.approve is exactly `packShopAddress`.
+2. **Allowance check.** `useScaffoldReadContract({ contractName: "USDC", functionName: "allowance", args: [buyer, packShopAddress] })`.
+   - `spender` argument is exactly `packShopAddress` — same address used in approve. ✓
+3. **Buy step.** `writeUsdcPack({ functionName: "buyPackUSDC", args: [pack.packType, pack.priceUsdc] })`.
+4. **Inside PackShop.buyPackUSDC** (PackShop.sol:233): `IERC20(usdc).safeTransferFrom(msg.sender, revenueWallet, p.priceUsdc)`.
+   - `msg.sender` of `safeTransferFrom` is `address(this)` = `packShopAddress`. So the spender USDC checks `allowance(buyer, packShopAddress)` against `priceUsdc`. Same address as approve. ✓
+5. **Errors:** USDC reverts with `ERC20InsufficientAllowance(spender, allowance, needed)` — present in `externalContracts.ts:120-128`. `ERC20InsufficientBalance` — present. `ERC20InvalidSpender` / `ERC20InvalidReceiver` / `ERC20InvalidApprover` / `ERC20InvalidSender` — all present. PackShop's `PriceChanged`, `PackInactive`, `UsdcPurchaseDisabled` — all present in PackShop ABI.
+
+**Trace verdict:** PASS — spender consistency verified, ABI fully covers OZ v5 ERC20 + PackShop custom errors.
+
+**Note on USDC on Base:** the live USDC at `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` is a fiat-backed proxy that reverts with old-style string reverts AND with OZ-v5 custom errors depending on the call path. Both styles decode through `getParsedError` (string reverts decode natively, custom errors via the ABI we ship).
+
+### Trace 3 — Trait purchase
+
+`/traits` page → `CreaturePickerModal::handleBuy`:
+1. Reads `IERC721(card).ownerOf(tokenId)` inside TraitShop.buyTrait (TraitShop.sol).
+2. Verifies `card.hasRole(TRAIT_FUSER_ROLE, traitShopAddress)` — **NOT done by the frontend** (deploy script grants this role, but UI does not double-check). Filed as issue #9 (should-fix).
+3. Calls `IAnimalKingdomCardFuser(card).fuseTrait(tokenId, traitId)` — reverts with `AccessControlUnauthorizedAccount(account, role)` if role missing. `AccessControlUnauthorizedAccount` IS in AnimalKingdomCard ABI (line 1310 of `deployedContracts.ts`). `getParsedErrorWithAllAbis` cross-decodes via the card ABI, so the user gets a readable error if the role is somehow not granted.
+4. TraitShop's own errors (`NotTokenOwner`, `IncorrectPayment`, `TraitUnavailable`, `EthForwardFailed`, etc.) — all in TraitShop ABI (line 2820-2950).
+
+**Trace verdict:** errors decode, but the role check should be a UI gate (issue #9).
+
+### Trace 4 — Wallet connect / wrong network
+
+- Header `RainbowKitCustomConnectButton` renders `<button>Connect Wallet</button>` when not connected. ✓ (line 35 of `RainbowKitCustomConnectButton/index.tsx`)
+- When connected on wrong chain: `chain.unsupported || chain.id !== targetNetwork.id` → renders `<WrongNetworkDropdown>` which is a labelled red `btn btn-error` dropdown. ✓
+- **HOWEVER:** Per QA SKILL, the action button (Buy with ETH, Buy with USDC, Buy & Fuse) must ALSO branch into a Switch-network CTA in its own slot. Currently the buy buttons render normally when on wrong chain and rely on `useScaffoldWriteContract` to toast a network error after click. **This is a QA SKILL ship-blocker FAIL.** Filed as issue #7.
+
+### Trace 5 — Approve button cooldown
+
+`PackCard::handleApprove` and the `disabled={!buyer || isApproving || cooldownActive}` gate (line 327):
+1. Click → `useScaffoldWriteContract.sendContractWriteAsyncTx` sets `setIsMining(true)`.
+2. `writeTx` from `useTransactor` calls `writeContractAsync` then `await publicClient.waitForTransactionReceipt({ hash })`. So `isApproving` stays true through full block confirmation.
+3. After receipt, `setIsMining(false)` runs in `finally {}`. Same call returns the hash.
+4. `setApproveTxHash(hash)` triggers `useWaitForTransactionReceipt({ hash: approveTxHash })` which fires its own poll. On `isSuccess`, the effect at line 204-212 sets `cooldownActive = true` for 3 seconds, then `refetchAllowance`.
+
+**Window analysis:** Between step 3 (`isApproving=false`) and step 4 (`cooldownActive=true`), there is a brief window where neither state is set. In practice, the `allowanceEnough` check (`allowance >= priceUsdc`) gates the buy button anyway — and `allowance` is stale until `refetchAllowance` runs. So the user can theoretically click but the buy will fail with a useful toast. This is a should-fix (issue #14) per the QA SKILL's explicit two-state requirement.
+
+**Trace verdict:** PASS in practice but the explicit `approvalSubmitting` state from QA SKILL is missing — issue #14.
+
+### Trace 6 — Battle screen WS
+
+`/battle` page (battle/page.tsx):
+- Module-level: only constants and types. No `new WebSocket()` at module scope. ✓
+- `BattlePage` renders `<NotConfiguredState/>` (no WS) when `scaffoldConfig.gameServerWss` is empty. The button is `disabled` and renders helpful copy. ✓
+- `BattleClient` only mounts when `isConfigured = Boolean(wssUrl)` is true. Inside `BattleClient`, `connect()` constructs the WS in a `try/catch` inside `useEffect` flow (called from `useEffect` via the connect `useCallback`). ✓
+- `localStorage` reads gated on `connectedAddress` inside `useEffect`. ✓
+
+**Trace verdict:** PASS — defensive static-export safety holds.
+
+### Ship-blocker checklist
+
+| # | Check | PASS/FAIL | Notes |
+| - | ----- | --------- | ----- |
+| 1 | Wallet connect shows a button, not text | PASS | `RainbowKitCustomConnectButton` renders `<button>Connect Wallet</button>`. Header has it. |
+| 2 | Wrong network shows a Switch button (one-at-a-time flow) | **FAIL** | Header dropdown only — buy buttons do not branch. Issue #7. |
+| 3 | Approve button stays disabled through block confirmation + cooldown | PASS | `isApproving` (covers click→confirmed via `useTransactor.waitForTransactionReceipt`) + `cooldownActive` (3s after receipt). Mild window in between is gated by `allowanceEnough`. |
+| 4 | Approve flow traced end-to-end (USDC.approve(PackShop) → PackShop.transferFrom(buyer, revenueWallet)) | PASS | Spender = `packShopAddress` in approve, same address in `safeTransferFrom(msg.sender=PackShop, revenueWallet, priceUsdc)`. Allowance check uses the same spender. |
+| 5 | ABI includes all custom errors from every contract in call chain | PASS | USDC ABI has all OZ v5 ERC20 errors. PackShop ABI has `PriceChanged`, `PackInactive`, `IncorrectPayment`, `EthForwardFailed`, `EthPurchaseDisabled`, `UsdcPurchaseDisabled`. AnimalKingdomCard ABI has `AccessControlUnauthorizedAccount`, `ERC721NonexistentToken`, `TraitLimitReached`, all OZ ERC721 errors. `getParsedErrorWithAllAbis` cross-decodes. |
+| 6 | SE2 footer branding fully removed (Fork-me / BuidlGuidl / Support / nativeCurrencyPrice badge) | PASS | `Footer.tsx` rewritten to project content; no badge, no SE2 links. |
+| 7 | Tab title `"%s | Scaffold-ETH 2"` → `"%s | Animal Kingdom TCG"` | PASS | `getMetadata.ts:9` `titleTemplate = "%s \| Animal Kingdom TCG"`. |
+| 8 | README replaced (placeholder OK) | PASS | Project description present, placeholder noted; `readme` stage will fill it out. |
+| 9 | Favicon replaced (not SE2 default) | PASS | `app/icon.tsx` renders 🦁 emoji with `dynamic="force-static"`. |
+| 10 | No module-level `localStorage` / `new WebSocket()` | PASS | All access gated inside `useEffect`. |
+| 11 | Bare `http()` fallback removed (CLAUDE.md hard rule + QA RPC reliability) | **FAIL** | `wagmiConfig.tsx:21` keeps a bare `http()` that hits public Base RPC. Issue #8. |
+
+**Ship-blocker totals: 9 PASS, 2 FAIL** (issues #7, #8 must close before Stage 9 IPFS deploy).
+
+### Should-fix checklist
+
+| # | Check | PASS/FAIL | Notes |
+| - | ----- | --------- | ----- |
+| 1 | Contract address displayed with `<Address/>` component | **FAIL** | Footer renders raw text "Card contract" link; should use `<Address/>`. Issue #10. |
+| 2 | OG image uses absolute URL (`NEXT_PUBLIC_PRODUCTION_URL` checked first) | PASS | `getMetadata.ts:3` checks `NEXT_PUBLIC_PRODUCTION_URL` before `VERCEL_*` before localhost. |
+| 3 | `--radius-field: 0.5rem` in both globals.css theme blocks | PASS | Lines 40 and 65 of `globals.css`. |
+| 4 | All token amounts have USD context | PASS | `formatEthWithUsd` and `formatUsdc` used everywhere. |
+| 5 | Errors mapped to human-readable messages — verify ABI covers all error types | PASS | See ship-blocker #5. |
+| 6 | Phantom wallet in RainbowKit wallet list | PASS | `wagmiConnectors.tsx:23` `phantomWallet` present. |
+| 7 | Mobile deep linking: `writeAndOpen` pattern | PASS | `useWriteAndOpen` hook with 2s `setTimeout(openConnectedWallet, 2000)`. Wraps every write call. |
+| 8 | `appName` in `wagmiConnectors.tsx` is `"Animal Kingdom TCG"` (not `"scaffold-eth-2"`) | PASS | Line 50 reads `scaffoldConfig.appName` = `"Animal Kingdom TCG"`. |
+| 9 | TraitShop pre-checks TRAIT_FUSER_ROLE before showing buy button | **FAIL** | Stage 7 prompt explicit requirement. Issue #9. |
+| 10 | Home page uses Connect button as primary CTA, not text saying "connect" | **FAIL** | `app/page.tsx:42` renders `<p>Sign in or connect a wallet from the top-right to begin.</p>`. Header button is visible, so downgraded to should-fix. Issue #11. |
+| 11 | `pollingInterval: 3000` (QA SKILL recommendation) | **FAIL (info)** | Set to 4000. Reasonable for Base 2s blocks, but worth surfacing. Issue #12. |
+| 12 | `useScaffoldEventHistory` does not scan from block 0 of the chain | **FAIL** | `pack/page.tsx:421` and `profile/page.tsx` both use `fromBlock: 0n`. Hammers Alchemy. Issue #13. |
+| 13 | Approve flow uses explicit `approvalSubmitting` state per QA SKILL pattern | **FAIL (low risk)** | `isApproving` from hook + `cooldownActive` mostly cover it; QA SKILL wants the explicit pattern. Issue #14. |
+
+**Should-fix totals: 8 PASS, 5 FAIL.**
+
+### Filed GitHub issues
+
+| # | Severity | Title |
+| - | -------- | ----- |
+| 7 | ship-blocker | Buy buttons do not become Switch-network CTA on wrong chain |
+| 8 | ship-blocker | Bare `http()` fallback transport hits public RPCs in parallel |
+| 9 | should-fix | Trait page does not pre-check TRAIT_FUSER_ROLE on TraitShop |
+| 10 | should-fix | Footer card-contract link should use `<Address/>` component |
+| 11 | should-fix | Home page renders `<p>Sign in or connect</p>` instead of a Connect button in the body |
+| 12 | should-fix (info) | `pollingInterval` is 4000, QA recommends 3000 |
+| 13 | should-fix | `useScaffoldEventHistory` uses `fromBlock: 0n` (full Base history scan) |
+| 14 | should-fix (low risk) | approve+buy gap: `isApproving` and `cooldownActive` may briefly both be false |
+
+All issues labeled `job-80` + `frontend-audit`. URLs:
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/7
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/8
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/9
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/10
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/11
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/12
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/13
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/14
+
+### Top 3 findings
+
+1. **#7 [ship-blocker] Buy buttons do not become Switch-network CTA** — on wrong chain, the action buttons render normally and rely on a post-click toast. QA SKILL explicit FAIL. Must add `useChainId` + `useSwitchChain` branch in the primary CTA slot for `/pack` and `/traits`.
+2. **#8 [ship-blocker] Bare `http()` fallback in `wagmiConfig.tsx:21`** — silently sends every RPC call to public Base RPC in parallel with Alchemy. CLAUDE.md hard-rule violation AND QA SKILL FAIL. One-line fix.
+3. **#9 [should-fix] Trait page lacks TRAIT_FUSER_ROLE pre-check** — Stage 7 audit prompt explicit requirement. If the role is ever revoked or the deploy script fails to grant it, users lose ETH on the buy step before the revert. Easy: read `card.hasRole(TRAIT_FUSER_ROLE, traitShopAddress)` and disable buy if false.
+
+### Architectural verdict
+
+The frontend is in good shape overall: the approve→buy flow is correctly wired with end-to-end spender consistency, OZ v5 custom errors are fully ABI-covered, the static-export discipline is defensive (no module-level WS / localStorage), and SE2 branding cleanup is complete. The two ship-blockers are both ergonomic fixes (one-button-at-a-time on wrong network; remove bare http fallback) — neither requires architectural rework. The 6 should-fix items are mostly polish (Address component, home-page CTA, polling interval, fromBlock).
+
+Stage 8 should be a quick pass: each issue has a precise one-paragraph fix recipe in the body.
+
+### Pass/fail vs Stage 7 spec
+
+- [x] Every ship-blocker checklist item explicitly marked PASS or FAIL
+- [x] Every should-fix item explicitly marked PASS or FAIL
+- [x] Trace executed end-to-end with real values for every write flow (Pack ETH, Pack USDC, Trait purchase, Wallet connect, Approve cooldown, Battle WS)
+- [x] ABI coverage verified by enumerating every error each external contract can throw and confirming presence in `externalContracts.ts` / `deployedContracts.ts`
+- [x] Spender consistency in USDC approve flow verified: `approve(packShopAddress, priceUsdc)` matches `safeTransferFrom(msg.sender = PackShop, revenueWallet, priceUsdc)` matches `allowance(buyer, packShopAddress)` lookup
+- [x] GitHub issues filed for every FAIL with `job-80` + `frontend-audit` labels
+- [x] HANDOFF.md updated with this Stage 7 section (audit only, no source modified)
+- [x] Stop conditions respected — no source files modified, no issues closed, no deploy, no IPFS upload
+
+### What Stage 8 (frontend_fix) should pick up
+
+- Read all open `job-80` + `frontend-audit` issues: `gh issue list --label "job-80" --label "frontend-audit" --state open` (issues #7-#14).
+- Fix all ship-blockers (#7, #8) — these MUST close before Stage 9 IPFS deploy.
+- Fix all should-fix items (#9-#14) — these MUST close before final job completion.
+- After each fix: run `cd packages/nextjs && yarn build` — must exit 0. Static export still goes to `packages/nextjs/out/`.
+- Each fix has an explicit one-paragraph recipe in the issue body. Don't redesign — implement.
+- Commit each fix with `closes #N` in the message; close the issue afterward.
+- Stop condition: do NOT deploy contracts (Stage 5 still pending), do NOT bgipfs upload (Stage 9).
+
