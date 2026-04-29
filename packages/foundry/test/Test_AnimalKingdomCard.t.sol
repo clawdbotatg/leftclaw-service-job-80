@@ -223,8 +223,94 @@ contract TestAnimalKingdomCard is Test {
     }
 
     function test_NonOwnerCannotSetImageBaseURI() public {
+        // Now gated by onlyRole(DEFAULT_ADMIN_ROLE) instead of onlyOwner.
+        bytes32 adminRole = card.DEFAULT_ADMIN_ROLE();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, adminRole
+            )
+        );
         vm.prank(stranger);
-        vm.expectRevert(); // OwnableUnauthorizedAccount selector — just confirm it reverts.
         card.setImageBaseURI("ipfs://nope/");
+    }
+
+    // -------------------------------------------------------------------------
+    // [Issue #1] Royalty cap — setDefaultRoyalty must reject feeBps > MAX_ROYALTY_BPS.
+    // -------------------------------------------------------------------------
+
+    function test_SetDefaultRoyaltyAtCapSucceeds() public {
+        uint96 cap = card.MAX_ROYALTY_BPS();
+        // 10% should be allowed exactly (the cap is inclusive).
+        vm.prank(admin);
+        card.setDefaultRoyalty(stranger, cap);
+
+        vm.prank(admin);
+        uint256 tokenId = card.mintCreature(player, 1, 1, 1, 1, 1);
+        (address receiver, uint256 amount) = card.royaltyInfo(tokenId, 1 ether);
+        assertEq(receiver, stranger);
+        assertEq(amount, 0.1 ether);
+    }
+
+    function test_SetDefaultRoyaltyAboveCapReverts() public {
+        uint96 cap = card.MAX_ROYALTY_BPS();
+        uint96 tooHigh = cap + 1;
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(AnimalKingdomCard.RoyaltyTooHigh.selector, tooHigh, cap));
+        card.setDefaultRoyalty(stranger, tooHigh);
+    }
+
+    function test_SetDefaultRoyaltyTypoFiftyPercentReverts() public {
+        // The headline scenario from the audit finding: typo `5000` instead of `500`.
+        // Cache the cap before the prank so reading it doesn't consume the prank.
+        uint96 cap = card.MAX_ROYALTY_BPS();
+        vm.expectRevert(
+            abi.encodeWithSelector(AnimalKingdomCard.RoyaltyTooHigh.selector, uint96(5000), cap)
+        );
+        vm.prank(admin);
+        card.setDefaultRoyalty(stranger, 5000);
+    }
+
+    // -------------------------------------------------------------------------
+    // [Issue #4] AccessControlDefaultAdminRules — admin rotation is timelocked,
+    // direct revoke of DEFAULT_ADMIN_ROLE via revokeRole is forbidden, brick-via-renounce
+    // requires the same delay flow.
+    // -------------------------------------------------------------------------
+
+    function test_RevokeDefaultAdminRoleDirectlyReverts() public {
+        // AccessControlDefaultAdminRules forbids using `revokeRole` to remove the admin —
+        // it must go through the begin/accept default admin transfer flow.
+        bytes32 adminRole = card.DEFAULT_ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(); // AccessControlEnforcedDefaultAdminRules
+        card.revokeRole(adminRole, admin);
+    }
+
+    function test_RenounceDefaultAdminRoleWithoutScheduleReverts() public {
+        // Admin cannot brick the contract by renouncing without scheduling the renounce
+        // through beginDefaultAdminTransfer first.
+        bytes32 adminRole = card.DEFAULT_ADMIN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(); // AccessControlEnforcedDefaultAdminDelay
+        card.renounceRole(adminRole, admin);
+    }
+
+    function test_DefaultAdminTransferRespectsDelay() public {
+        // Admin schedules a transfer to `stranger`. Cannot accept before delay elapses.
+        vm.prank(admin);
+        card.beginDefaultAdminTransfer(stranger);
+
+        // Stranger tries to accept too early.
+        vm.prank(stranger);
+        vm.expectRevert(); // AccessControlEnforcedDefaultAdminDelay
+        card.acceptDefaultAdminTransfer();
+
+        // Warp past the delay; accept should now succeed.
+        vm.warp(block.timestamp + card.ADMIN_TRANSFER_DELAY() + 1);
+        vm.prank(stranger);
+        card.acceptDefaultAdminTransfer();
+        assertEq(card.defaultAdmin(), stranger);
+        // Now stranger is the admin and admin is no longer.
+        assertTrue(card.hasRole(card.DEFAULT_ADMIN_ROLE(), stranger));
+        assertFalse(card.hasRole(card.DEFAULT_ADMIN_ROLE(), admin));
     }
 }

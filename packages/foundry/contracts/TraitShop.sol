@@ -22,16 +22,35 @@ interface IAnimalKingdomCardFuser {
  *         contract verifies they own the target token, forwards funds to the revenue
  *         wallet, and calls `fuseTrait` on the card contract.
  *
+ *         The bound `card` is set in the constructor and is `immutable` — there is no
+ *         migration path. Fresh AnimalKingdomCard deployments require a fresh TraitShop
+ *         deployment (TraitShop is small enough to redeploy cheaply on Base).
+ *
+ *         ETH purchases require `msg.value == priceWei` exactly. There is no refund
+ *         path — buyers pass the exact price they read via `getTrait`. This eliminates
+ *         the contract-wallet refund-DoS surface.
+ *
+ *         Revenue wallet rotation is gated by a 24-hour timelock to bound the blast
+ *         radius of an admin-key compromise (`proposeRevenueWallet` /
+ *         `acceptRevenueWallet`).
+ *
  *         Requirement: TraitShop must hold `TRAIT_FUSER_ROLE` on the AnimalKingdomCard
  *         contract for `buyTrait` to succeed. This is granted at deploy-time as a setup
  *         step (see HANDOFF.md).
  *
  *         CEI: ownership and price are checked, the fuse call is made, then funds are
- *         forwarded and excess refunded. Funds do not normally accumulate here; sweep
- *         functions exist for defensive recovery.
+ *         forwarded. Funds do not normally accumulate here; sweep functions exist for
+ *         defensive recovery.
  */
 contract TraitShop is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    // -------------------------------------------------------------------------
+    // Constants
+    // -------------------------------------------------------------------------
+
+    /// @notice Delay between proposing and accepting a new revenue wallet.
+    uint256 public constant REVENUE_WALLET_TIMELOCK = 24 hours;
 
     // -------------------------------------------------------------------------
     // Storage
@@ -46,11 +65,20 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
     /// @notice Trait catalog. Keyed by traitId (matches the id stored on the NFT).
     mapping(uint256 => TraitInfo) public traitCatalog;
 
-    /// @notice The AnimalKingdomCard contract this shop fuses traits onto.
-    address public card;
+    /// @notice The AnimalKingdomCard contract this shop fuses traits onto. Immutable —
+    ///         migration requires a fresh TraitShop deployment.
+    address public immutable card;
 
-    /// @notice Address that receives sale proceeds. Mutable by owner.
+    /// @notice Address that receives sale proceeds. Mutable by owner via the timelocked
+    ///         propose/accept flow.
     address public revenueWallet;
+
+    /// @notice Pending revenue wallet awaiting acceptance.
+    address public pendingRevenueWallet;
+
+    /// @notice Earliest timestamp at which `pendingRevenueWallet` may be promoted via
+    ///         `acceptRevenueWallet`. 0 means no proposal is active.
+    uint256 public revenueWalletEffectiveAt;
 
     // -------------------------------------------------------------------------
     // Events
@@ -61,8 +89,9 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
     );
     event TraitAdded(uint256 indexed traitId, uint256 priceWei, string metadataURI);
     event TraitAvailabilityChanged(uint256 indexed traitId, bool available);
+    event RevenueWalletProposed(address indexed proposed, uint256 effectiveAt);
     event RevenueWalletUpdated(address indexed previous, address indexed current);
-    event CardUpdated(address indexed previous, address indexed current);
+    event RevenueWalletProposalCancelled(address indexed cancelled);
     event EthSwept(address indexed to, uint256 amount);
     event TokenSwept(address indexed token, address indexed to, uint256 amount);
 
@@ -73,10 +102,11 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
     error ZeroAddress();
     error NotTokenOwner(uint256 tokenId, address caller);
     error TraitUnavailable(uint256 traitId);
-    error InsufficientPayment(uint256 sent, uint256 required);
+    error IncorrectPayment(uint256 sent, uint256 required);
     error EthForwardFailed();
-    error RefundFailed();
     error SweepFailed();
+    error NoPendingRevenueWallet();
+    error TimelockNotElapsed(uint256 currentTime, uint256 effectiveAt);
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -84,7 +114,8 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
 
     /**
      * @param admin    Owner / `job.client`. Also the initial revenue wallet.
-     * @param cardAddr AnimalKingdomCard contract this shop fuses traits onto.
+     * @param cardAddr AnimalKingdomCard contract this shop fuses traits onto. Stored as
+     *                 immutable; migration requires redeploying TraitShop.
      */
     constructor(address admin, address cardAddr) Ownable(admin) {
         if (admin == address(0) || cardAddr == address(0)) revert ZeroAddress();
@@ -108,20 +139,42 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
         emit TraitAvailabilityChanged(traitId, available);
     }
 
-    /// @notice Update the revenue wallet.
-    function setRevenueWallet(address newWallet) external onlyOwner {
+    // -------------------------------------------------------------------------
+    // Admin: revenue wallet (timelocked rotation)
+    // -------------------------------------------------------------------------
+
+    /// @notice Propose a new revenue wallet. Becomes effective after
+    ///         `REVENUE_WALLET_TIMELOCK` has elapsed via `acceptRevenueWallet`.
+    /// @dev    Calling this overwrites any prior pending proposal.
+    function proposeRevenueWallet(address newWallet) external onlyOwner {
         if (newWallet == address(0)) revert ZeroAddress();
-        address prev = revenueWallet;
-        revenueWallet = newWallet;
-        emit RevenueWalletUpdated(prev, newWallet);
+        pendingRevenueWallet = newWallet;
+        revenueWalletEffectiveAt = block.timestamp + REVENUE_WALLET_TIMELOCK;
+        emit RevenueWalletProposed(newWallet, revenueWalletEffectiveAt);
     }
 
-    /// @notice Update the AnimalKingdomCard address (used for migrations only).
-    function setCard(address newCard) external onlyOwner {
-        if (newCard == address(0)) revert ZeroAddress();
-        address prev = card;
-        card = newCard;
-        emit CardUpdated(prev, newCard);
+    /// @notice Promote `pendingRevenueWallet` to `revenueWallet` after the timelock has
+    ///         elapsed.
+    function acceptRevenueWallet() external onlyOwner {
+        address pending = pendingRevenueWallet;
+        if (pending == address(0)) revert NoPendingRevenueWallet();
+        if (block.timestamp < revenueWalletEffectiveAt) {
+            revert TimelockNotElapsed(block.timestamp, revenueWalletEffectiveAt);
+        }
+        address prev = revenueWallet;
+        revenueWallet = pending;
+        pendingRevenueWallet = address(0);
+        revenueWalletEffectiveAt = 0;
+        emit RevenueWalletUpdated(prev, pending);
+    }
+
+    /// @notice Cancel a pending revenue-wallet proposal before it has been accepted.
+    function cancelRevenueWalletProposal() external onlyOwner {
+        address pending = pendingRevenueWallet;
+        if (pending == address(0)) revert NoPendingRevenueWallet();
+        pendingRevenueWallet = address(0);
+        revenueWalletEffectiveAt = 0;
+        emit RevenueWalletProposalCancelled(pending);
     }
 
     // -------------------------------------------------------------------------
@@ -130,8 +183,8 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
 
     /**
      * @notice Buy a trait fusion for `tokenId`. Caller must own the token and the trait
-     *         must be available. Forwards funds to `revenueWallet`, then calls
-     *         `fuseTrait` on the card contract. Refunds any excess to the buyer.
+     *         must be available. Caller must send the exact `priceWei`. Forwards funds
+     *         to `revenueWallet`, then calls `fuseTrait` on the card contract.
      */
     function buyTrait(uint256 tokenId, uint256 traitId) external payable nonReentrant {
         // Checks
@@ -139,7 +192,7 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
 
         TraitInfo memory info = traitCatalog[traitId];
         if (!info.available) revert TraitUnavailable(traitId);
-        if (msg.value < info.priceWei) revert InsufficientPayment(msg.value, info.priceWei);
+        if (msg.value != info.priceWei) revert IncorrectPayment(msg.value, info.priceWei);
 
         // Effects
         emit TraitPurchased(msg.sender, tokenId, traitId, info.priceWei);
@@ -148,17 +201,11 @@ contract TraitShop is Ownable2Step, ReentrancyGuard {
         // 1. Fuse the trait onto the NFT (requires TraitShop to hold TRAIT_FUSER_ROLE on `card`).
         IAnimalKingdomCardFuser(card).fuseTrait(tokenId, traitId);
 
-        // 2. Forward sale proceeds to revenue wallet.
+        // 2. Forward sale proceeds to revenue wallet. No refund path — exact payment was
+        //    required above.
         if (info.priceWei > 0) {
             (bool ok,) = revenueWallet.call{ value: info.priceWei }("");
             if (!ok) revert EthForwardFailed();
-        }
-
-        // 3. Refund excess.
-        uint256 excess = msg.value - info.priceWei;
-        if (excess > 0) {
-            (bool refunded,) = msg.sender.call{ value: excess }("");
-            if (!refunded) revert RefundFailed();
         }
     }
 

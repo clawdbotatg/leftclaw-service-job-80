@@ -14,10 +14,23 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
  *         service rolls creatures + stats then calls `AnimalKingdomCard.batchMintPack`
  *         with its MINTER_ROLE wallet.
  *
- *         CEI / fund custody: ETH purchases are forwarded to `revenueWallet` immediately
- *         in the same call (CEI pattern). USDC purchases use `transferFrom` directly to
+ *         Pricing safety:
+ *           - `buyPack` and `buyPackUSDC` take an `expectedPrice` argument (Uniswap-style
+ *             slippage param). The frontend reads the current price via `getPack` and
+ *             pins it in the call; if the on-chain price has moved, the tx reverts
+ *             cleanly with `PriceChanged` instead of consuming whatever price is current.
+ *           - ETH purchases require `msg.value == priceWei` exactly. There is no refund
+ *             path — buyers pass the exact price they read. This eliminates the
+ *             contract-wallet refund-DoS surface.
+ *
+ *         Fund custody: ETH purchases are forwarded to `revenueWallet` immediately in
+ *         the same call (CEI pattern). USDC purchases use `transferFrom` directly to
  *         `revenueWallet`. Funds therefore do not normally accumulate here. `sweepEth`
  *         and `sweepToken` exist for defensive recovery only.
+ *
+ *         Revenue wallet rotation is gated by a 24-hour timelock to bound the blast
+ *         radius of an admin-key compromise (`proposeRevenueWallet` /
+ *         `acceptRevenueWallet`).
  *
  *         Pack purchases produce a `requestId` derived from buyer, pack type, block
  *         number, and a per-buyer monotonic nonce so two purchases by the same buyer
@@ -25,6 +38,13 @@ import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.s
  */
 contract PackShop is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    // -------------------------------------------------------------------------
+    // Constants
+    // -------------------------------------------------------------------------
+
+    /// @notice Delay between proposing and accepting a new revenue wallet.
+    uint256 public constant REVENUE_WALLET_TIMELOCK = 24 hours;
 
     // -------------------------------------------------------------------------
     // Storage
@@ -46,8 +66,16 @@ contract PackShop is Ownable2Step, ReentrancyGuard {
     /// @notice USDC token address. Set in constructor; immutable in practice for the deployment.
     address public immutable usdc;
 
-    /// @notice Address that receives all sale proceeds. Mutable by owner.
+    /// @notice Address that receives all sale proceeds. Mutable by owner via the timelocked
+    ///         propose/accept flow.
     address public revenueWallet;
+
+    /// @notice Pending revenue wallet awaiting acceptance.
+    address public pendingRevenueWallet;
+
+    /// @notice Earliest timestamp at which `pendingRevenueWallet` may be promoted via
+    ///         `acceptRevenueWallet`. 0 means no proposal is active.
+    uint256 public revenueWalletEffectiveAt;
 
     // -------------------------------------------------------------------------
     // Events
@@ -56,7 +84,9 @@ contract PackShop is Ownable2Step, ReentrancyGuard {
     event PackPurchased(address indexed buyer, uint8 indexed packType, bytes32 requestId);
     event PackUpdated(uint8 indexed packType, uint256 priceWei, uint256 priceUsdc, bool active, string name);
     event PackActiveChanged(uint8 indexed packType, bool active);
+    event RevenueWalletProposed(address indexed proposed, uint256 effectiveAt);
     event RevenueWalletUpdated(address indexed previous, address indexed current);
+    event RevenueWalletProposalCancelled(address indexed cancelled);
     event EthSwept(address indexed to, uint256 amount);
     event TokenSwept(address indexed token, address indexed to, uint256 amount);
 
@@ -66,12 +96,14 @@ contract PackShop is Ownable2Step, ReentrancyGuard {
 
     error ZeroAddress();
     error PackInactive(uint8 packType);
-    error InsufficientPayment(uint256 sent, uint256 required);
+    error IncorrectPayment(uint256 sent, uint256 required);
     error EthPurchaseDisabled(uint8 packType);
     error UsdcPurchaseDisabled(uint8 packType);
+    error PriceChanged(uint256 onchain, uint256 expected);
     error EthForwardFailed();
-    error RefundFailed();
     error SweepFailed();
+    error NoPendingRevenueWallet();
+    error TimelockNotElapsed(uint256 currentTime, uint256 effectiveAt);
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -104,12 +136,42 @@ contract PackShop is Ownable2Step, ReentrancyGuard {
         emit PackActiveChanged(packType, active);
     }
 
-    /// @notice Update the address that receives sale proceeds.
-    function setRevenueWallet(address newWallet) external onlyOwner {
+    // -------------------------------------------------------------------------
+    // Admin: revenue wallet (timelocked rotation)
+    // -------------------------------------------------------------------------
+
+    /// @notice Propose a new revenue wallet. Becomes effective after
+    ///         `REVENUE_WALLET_TIMELOCK` has elapsed via `acceptRevenueWallet`.
+    /// @dev    Calling this overwrites any prior pending proposal.
+    function proposeRevenueWallet(address newWallet) external onlyOwner {
         if (newWallet == address(0)) revert ZeroAddress();
+        pendingRevenueWallet = newWallet;
+        revenueWalletEffectiveAt = block.timestamp + REVENUE_WALLET_TIMELOCK;
+        emit RevenueWalletProposed(newWallet, revenueWalletEffectiveAt);
+    }
+
+    /// @notice Promote `pendingRevenueWallet` to `revenueWallet` after the timelock has
+    ///         elapsed.
+    function acceptRevenueWallet() external onlyOwner {
+        address pending = pendingRevenueWallet;
+        if (pending == address(0)) revert NoPendingRevenueWallet();
+        if (block.timestamp < revenueWalletEffectiveAt) {
+            revert TimelockNotElapsed(block.timestamp, revenueWalletEffectiveAt);
+        }
         address prev = revenueWallet;
-        revenueWallet = newWallet;
-        emit RevenueWalletUpdated(prev, newWallet);
+        revenueWallet = pending;
+        pendingRevenueWallet = address(0);
+        revenueWalletEffectiveAt = 0;
+        emit RevenueWalletUpdated(prev, pending);
+    }
+
+    /// @notice Cancel a pending revenue-wallet proposal before it has been accepted.
+    function cancelRevenueWalletProposal() external onlyOwner {
+        address pending = pendingRevenueWallet;
+        if (pending == address(0)) revert NoPendingRevenueWallet();
+        pendingRevenueWallet = address(0);
+        revenueWalletEffectiveAt = 0;
+        emit RevenueWalletProposalCancelled(pending);
     }
 
     // -------------------------------------------------------------------------
@@ -117,14 +179,20 @@ contract PackShop is Ownable2Step, ReentrancyGuard {
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Buy a pack with ETH. Forwards funds to `revenueWallet` immediately. Refunds
-     *         any excess to the buyer.
+     * @notice Buy a pack with ETH. Forwards funds to `revenueWallet` immediately. Caller
+     *         must send the exact price (`msg.value == priceWei`) — overpayment reverts.
+     *
+     * @param packType         The pack catalog id to buy.
+     * @param expectedPriceWei The price the caller saw on the frontend. Must match the
+     *                          on-chain `priceWei` exactly. Acts as a slippage guard
+     *                          against owner price changes between read and execute.
      */
-    function buyPack(uint8 packType) external payable nonReentrant {
+    function buyPack(uint8 packType, uint256 expectedPriceWei) external payable nonReentrant {
         PackType memory p = packs[packType];
         if (!p.active) revert PackInactive(packType);
         if (p.priceWei == 0) revert EthPurchaseDisabled(packType);
-        if (msg.value < p.priceWei) revert InsufficientPayment(msg.value, p.priceWei);
+        if (p.priceWei != expectedPriceWei) revert PriceChanged(p.priceWei, expectedPriceWei);
+        if (msg.value != p.priceWei) revert IncorrectPayment(msg.value, p.priceWei);
 
         // Effects: bump nonce + compute request id BEFORE external calls.
         uint256 nonce = ++buyerNonce[msg.sender];
@@ -133,26 +201,26 @@ contract PackShop is Ownable2Step, ReentrancyGuard {
 
         emit PackPurchased(msg.sender, packType, requestId);
 
-        // Interactions: forward sale proceeds to revenue wallet.
+        // Interactions: forward sale proceeds to revenue wallet. No refund path — exact
+        // payment was required above.
         (bool ok,) = revenueWallet.call{ value: p.priceWei }("");
         if (!ok) revert EthForwardFailed();
-
-        // Refund any excess.
-        uint256 excess = msg.value - p.priceWei;
-        if (excess > 0) {
-            (bool refunded,) = msg.sender.call{ value: excess }("");
-            if (!refunded) revert RefundFailed();
-        }
     }
 
     /**
      * @notice Buy a pack with USDC. Pulls `priceUsdc` USDC from the buyer directly to
      *         `revenueWallet` via `transferFrom`. Buyer must `approve` PackShop first.
+     *
+     * @param packType          The pack catalog id to buy.
+     * @param expectedPriceUsdc The price the caller saw on the frontend. Must match the
+     *                           on-chain `priceUsdc` exactly. Acts as a slippage guard
+     *                           against owner price changes between read and execute.
      */
-    function buyPackUSDC(uint8 packType) external nonReentrant {
+    function buyPackUSDC(uint8 packType, uint256 expectedPriceUsdc) external nonReentrant {
         PackType memory p = packs[packType];
         if (!p.active) revert PackInactive(packType);
         if (p.priceUsdc == 0) revert UsdcPurchaseDisabled(packType);
+        if (p.priceUsdc != expectedPriceUsdc) revert PriceChanged(p.priceUsdc, expectedPriceUsdc);
 
         // Effects.
         uint256 nonce = ++buyerNonce[msg.sender];
