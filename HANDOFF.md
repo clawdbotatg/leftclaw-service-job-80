@@ -950,5 +950,122 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-28 by Opus subagent after Stage 4b (`prototype` — battle screen WS state machine + `/server/` scaffolding) completed. Edit this date when you append a new section.
+2026-04-28 by Opus subagent after Stage 5 (`contract_audit`) completed. Edit this date when you append a new section.
+
+---
+
+## Stage 5 — Contract Audit
+
+**Status:** PASS (audit-only, no source modified)
+
+**Methodology:** Walked the three contracts (`AnimalKingdomCard.sol`, `PackShop.sol`, `TraitShop.sol`) against the parallel-specialist matrix from `https://ethskills.com/audit/SKILL.md`:
+
+- General correctness / first-principles
+- Precision & math (royalty, ETH/USDC, refund, requestId hashing)
+- ERC-721 & ERC-2981 (`_safeMint` reentrancy, `_update` overrides, ERC2981 default royalty)
+- Access control (DEFAULT_ADMIN_ROLE rotation, Ownable2Step, role gating)
+- Reentrancy / DoS (CEI on payable functions, fund-forwarding `.call`, refund return-value handling)
+- Signatures / EIP-712 — none present, n/a
+
+**Specific Stage-2 concerns explicitly verified:**
+
+- **`tokenURI` gas at MAX_TRAITS_PER_TOKEN=32.** Wrote a one-shot Foundry gas probe (then deleted — not part of production tests). Measurements:
+  - 0 traits: ~59,204 gas, 669 byte URI
+  - 32 traits with realistic 10-digit IDs: ~306,169 gas, 3,017 byte URI
+  - 32 traits with `type(uint256).max` IDs (78-digit decimals — pathological worst case): ~1,009,089 gas, 8,817 byte URI
+  All well under Base eth_call gas caps (50M typical). **Verdict: safe; this concern downgrades to Info.**
+- **`requestId` collision-resistance.** `keccak256(abi.encodePacked(buyer, packType, block.number, address(this), nonce))` — `nonce = ++buyerNonce[msg.sender]` is monotonic per buyer; abi.encodePacked uses fixed-size types (no length-ambiguity); buyer + nonce alone guarantee uniqueness. **Verdict: safe.**
+- **`_safeMint` reentrancy in `batchMintPack`.** Stats are written before `_safeMint`. Reenter via the `onERC721Received` callback would observe the *old* `_nextTokenId` (only updated after the loop), but token-id collision in OZ ERC721 reverts (`ERC721InvalidSender`). MINTER_ROLE gate further bounds the surface. **Verdict: not exploitable for a non-MINTER attacker.**
+- **DEFAULT_ADMIN_ROLE renounce footgun.** Filed as Medium (#4). Recommended `AccessControlDefaultAdminRules`.
+- **TraitShop `setCard` rug.** Filed as Medium (#2). Recommended making `card` immutable.
+- **`setRevenueWallet` rug.** Filed as Medium (#3). Recommended 24h timelock.
+- **Refund `.call` failure DoS.** Filed as Medium (#5). Recommended exact-payment-required.
+- **Sweep functions reasonable?** Yes — they only target the `revenueWallet`, no arbitrary destination, no fund-extraction surface. Note that if `revenueWallet` is non-payable, `sweepEth` reverts — recovery is to call `setRevenueWallet` first; documented as Info, not a finding.
+
+### Severity counts
+
+| Severity  | Count | IDs |
+| ---       | ---   | --- |
+| Critical  | 0     | — |
+| High      | 1     | G-01 (#1) |
+| Medium    | 5     | G-02 (#2), G-03 (#3), G-04 (#4), G-05 (#5), G-06 (#6) |
+| Low       | 0     | — |
+| Info      | 6     | G-07–G-12 (no issues filed; documented in Stage 5 return) |
+
+### Top findings (1-line each)
+
+1. **#1 [High] `setDefaultRoyalty` lacks an upper-bound check** — a single typo (e.g. `5000` vs `500`) silently sets a 50% royalty. Recommended fix: introduce `MAX_ROYALTY_BPS = 1000` (10%).
+2. **#4 [Medium] Sole-admin DEFAULT_ADMIN_ROLE renounce permanently bricks role rotation** — out-of-order role rotation ("revoke self before granting new") freezes the role surface forever. Recommended fix: replace `AccessControl` with `AccessControlDefaultAdminRules`.
+3. **#5 [Medium] Refund `.call` reverts the whole purchase tx for contract wallets** — Privy embedded smart-wallet users overpaying for slippage buffer get bricked. Recommended fix: require exact payment (`msg.value != priceWei → revert`).
+
+### Filed GitHub issues
+
+| # | Severity | Title |
+| - | -------- | ----- |
+| 1 | High     | setDefaultRoyalty has no upper bound — single-character typo can set 50%+ royalty |
+| 2 | Medium   | TraitShop.setCard rug — admin can swap card to a malicious or non-contract address |
+| 3 | Medium   | setRevenueWallet has no timelock — admin compromise instantly redirects in-flight funds |
+| 4 | Medium   | Sole-admin DEFAULT_ADMIN_ROLE can be renounced into a permanently bricked role surface |
+| 5 | Medium   | Refund failure on overpayment locks the entire purchase tx (DoS for contract wallets / strict-fallback receivers) |
+| 6 | Medium   | addPack lacks expectedPrice arg — owner can frontrun price-up to extract overpay buffer |
+
+All issues labeled `job-80` + `contract-audit` + a `severity:*` label. Issue URLs:
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/1
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/2
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/3
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/4
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/5
+- https://github.com/clawdbotatg/leftclaw-service-job-80/issues/6
+
+### Info-level findings (not filed; recorded here)
+
+These are documentation / nit-grade observations the next stage may consider but do not block deployment:
+
+- **G-07 [Info]** `_safeMint` zero-address check is delegated to OZ — confirmed safe; stats writes are rolled back on revert.
+- **G-08 [Info]** `getPack` / `getTrait` view helpers are needed because the auto-generated mapping accessor cannot return `string` fields. Frontend must call these explicitly. Stage 7 should verify.
+- **G-09 [Info]** `tokenURI` gas at 32 traits — confirmed safe (see measurements above).
+- **G-10 [Info]** `Ownable2Step` ownership transfer does NOT migrate AccessControl roles or `revenueWallet`. Document a post-deploy checklist in the Stage 13 README.
+- **G-11 [Info]** `PackUpdated` event omits previous values — minor indexer ergonomic.
+- **G-12 [Info]** `buyerNonce` is per-buyer global, not per-buyer-per-pack-type. Off-chain consumers must track sequence themselves. Not a bug; UX nit.
+
+### Architectural verdict
+
+The three contracts are well-structured and the core invariants — write-once stats, append-only traits, bounded loops — are all correctly enforced in code. The findings cluster into two themes:
+
+1. **Admin-trust hardening.** Several admin levers (royalty, revenue wallet, card pointer, role rotation) lack the safety rails that limit the blast radius of a typo or a key compromise. Adding caps + timelocks + immutability where possible would materially reduce the trust surface from "the admin EOA must be perfect" to "the admin EOA can fail safely".
+
+2. **Smart-wallet UX.** The refund-via-`.call` pattern (#5) and the missing `expectedPrice` (#6) both bite the Privy embedded-wallet target user base disproportionately. Tightening these is straightforward and worth doing before mainnet.
+
+No critical bugs. The path to ship is: fix #1, #4, #5 (highest-leverage); the rest are improvements the client should accept but not strictly blocking.
+
+### What Stage 6 (contract_fix) should pick up
+
+- Read all open issues with labels `job-80` + `contract-audit`: `gh issue list --label "job-80" --label "contract-audit" --state open`
+- Fix the High (#1) and all Mediums (#2–#6).
+- Run `forge build` and `forge test` after each fix — both must exit 0.
+- Reference each issue in the commit message (`fix: <issue-title> (closes #N)`) and `gh issue close N` after merge.
+- Verify the existing 15-test smoke suite still passes after fixes; consider adding regression tests for the royalty cap (#1), the price-pin (#6), and the timelock flow (#3).
+- The supportsInterface override list will need updating if you adopt `AccessControlDefaultAdminRules` (#4): replace `AccessControl` with `AccessControlDefaultAdminRules` in the inheritance list and the override args.
+
+### Files modified
+
+| Path | Change |
+| --- | --- |
+| `HANDOFF.md` | Stage 5 section appended (this section) |
+
+No code, no contracts, no tests modified — Stage 5 is read-only. The audit-only `Test_TokenURIGas.t.sol` probe was created, run for measurements, and deleted — it lives only in the gas figures recorded above.
+
+### Pass/fail vs Stage 5 spec
+
+- [x] All three contracts read end-to-end, walked against the parallel-specialist checklist
+- [x] Stage-2 specific concerns each explicitly verified or filed
+- [x] `tokenURI` gas at MAX_TRAITS_PER_TOKEN=32 measured (not patterned-matched)
+- [x] `requestId` collision analysis with concrete encoding inspection
+- [x] `_safeMint` reentrancy traced with state at each step
+- [x] One GitHub issue per Medium+ finding (6 issues, #1–#6)
+- [x] Severity counts + top findings + issue URLs recorded in this section
+- [x] No source files modified
+- [x] HANDOFF.md updated
+- [ ] (Note) `audit/AUDIT-REPORT.md` and `audit/findings-*.md` deliverables NOT written — the orchestrator harness blocked the Write tool on findings markdown files. The full audit content lives in this section and in the GitHub issue bodies; consider this Stage 5's canonical record.
+
 
