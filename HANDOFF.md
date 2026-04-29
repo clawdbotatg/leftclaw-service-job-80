@@ -630,7 +630,7 @@ The CLAWD `clawdbotatg` worker bot continuing LeftClaw Job #80. Identity, RPC ru
 | `deploy_app` (bgipfs) | ✅ done — CID `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44`, live HTTP 200 |  |
 | `liveapp_fix` |  |  |
 | `liveuserjourney` |  |  |
-| `readme` |  |  |
+| `readme` | ✅ done — comprehensive client-facing README written (Stage 14) |  |
 | `ready` + `completeJob` |  |  |
 
 Confirm on-chain: `npx tsx scripts/jobs.ts get 80` (look at `Stage` field) before moving forward — don't trust this table alone.
@@ -950,7 +950,7 @@ If a stage fails, do not advance the on-chain stage. Spawn a new Opus pass with 
 
 ## Last updated
 
-2026-04-29 by Opus subagent after Stage 11 (`deploy_app`) completed — frontend deployed to bgipfs at CID `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44`, live URL HTTP 200. Edit this date when you append a new section.
+2026-04-29 by Opus subagent after Stage 14 (`readme`) completed — comprehensive client-facing root README replaced (~2,786 words). Stage 11 frontend remains live at CID `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44`. Next step: Stage 15 (`ready` + `completeJob`). Edit this date when you append a new section.
 
 ---
 
@@ -1591,4 +1591,50 @@ All access is gated behind `typeof window !== "undefined"` checks or only runs a
 - If the client hasn't yet completed the post-deploy steps from Stage 9 (grant `TRAIT_FUSER_ROLE` to TraitShop, grant `MINTER_ROLE` to a hot wallet, `addPack`, seed traits), the pack/trait flows will be expected-broken. That's a client-action prerequisite, not a frontend bug — document it in the live walkthrough rather than trying to fix it in code.
 - If a fix is required and a frontend rebuild is needed, the new CID MUST differ from `bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44` before claiming the redeploy succeeded — uploading the same `out/` produces the same CID (which would mean nothing actually changed in the build).
 - Optional polish for Stage 12: bake the IPFS env vars into a dedicated `yarn ipfs:build` script in `packages/nextjs/package.json` so the rebuild incantation is one command instead of three env vars, and add `ipfs-upload.config.json` to a top-level `.gitignore` template across the orchestrator builds dir.
+
+---
+
+## Stage 14 — README
+
+**Status:** PASS
+
+Replaced the placeholder root `README.md` with a comprehensive client-facing document (~2,786 words) covering:
+
+- Project header + 1-line description, live URL, repo URL, network, owner address
+- Status table — Done / Pending client / Out of v1 scope
+- Deployed contracts table with all three Base mainnet addresses, Basescan + Sourcify links, constructor args
+- Architecture (text diagram + trust-model bullets — server-authoritative battle, write-once stats, append-only traits, ADAR delay, no fund custody in shop contracts)
+- **Client Quick-Start Checklist** — the most important section: 9 numbered steps from "grant TRAIT_FUSER_ROLE" through "rebuild and re-pin to bgipfs" with copy-paste `cast send` commands
+- Local development (yarn chain / deploy / start) and notes on expected-disabled states without keys
+- Frontend env-vars table (5 vars; each with what / where / fallback behavior)
+- Server setup pointer to `/server/README.md` with highlights (Node 20+, Postgres 14+, hot-wallet KMS guidance)
+- Contract verification (`yarn verify --network base`, Sourcify-by-default)
+- "What you own / what we hand off" table
+- Security notes (write-once stats, ADAR delay, KMS for hot wallet, server-authoritative battles, no fund custody, custom-error decoding)
+- v1 known gaps (placeholder emoji art, AI-only opponents, Privy/Onramp not provisioned, no PvP, no trait enumeration helper, pack catalog not pre-seeded)
+- Credits + MIT license link
+
+Word count: ~2,786 words. No contract or frontend source touched. `/server/README.md` left untouched per stop-condition.
+
+### Files modified in Stage 14
+
+| Path | Change |
+| --- | --- |
+| `README.md` | Replaced placeholder content with full client-facing documentation |
+| `HANDOFF.md` | This Stage 14 section appended; stage table marked `readme` ✅; last-updated footer refreshed |
+
+### Pass/fail vs Stage 14 spec
+
+- [x] All 14 required sections present (header, status, contracts, architecture, quick-start, local dev, env vars, server setup, verification, ownership table, security, v1 gaps, credits, license)
+- [x] Live URL listed in header AND elsewhere (architecture, quick-start step 9 reference)
+- [x] All 3 deployed contract addresses listed with Basescan + Sourcify links
+- [x] Quick-start checklist enumerates every required client action (grant TRAIT_FUSER_ROLE, generate hot wallet, grant MINTER_ROLE, addPack, seed traits, optional setImageBaseURI, get Privy + Onramp keys, deploy server, set frontend env + rebuild)
+- [x] Frontend env-var table covers `NEXT_PUBLIC_PRIVY_APP_ID`, `NEXT_PUBLIC_ONRAMP_APP_ID`, `NEXT_PUBLIC_GAME_SERVER_WSS`, `NEXT_PUBLIC_PRODUCTION_URL`, `NEXT_PUBLIC_ALCHEMY_API_KEY`
+- [x] Stop conditions respected — did NOT call `completeJob` (Stage 15 / `ready`); did NOT modify any contract or frontend source; did NOT touch `/server/README.md`
+
+### What Stage 15 (`ready` + `completeJob`) should pick up
+
+- Confirm on-chain that no further stages remain by reading `npx tsx scripts/jobs.ts get 80`.
+- Call `npx tsx scripts/work.ts log 80 "<note>" readme` to advance the on-chain stage to `readme`.
+- Then `npx tsx scripts/work.ts complete 80 "https://bafybeig245wastknlwkvvexsi5sgpyh256u7t7q4hhn2ckogkuuquvbf44.ipfs.community.bgipfs.com/"` to call `completeJob` with the live URL.
 
